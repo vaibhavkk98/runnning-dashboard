@@ -519,7 +519,7 @@ You are an expert AI Running Coach and Exercise Physiologist. Provide specific, 
 
 
 # =========================================================
-# 2. 🏃 SINGLE RUN DEEP-DIVE (RUN/WALK & HR ZONES & HISTORICAL GEMINI)
+# 2. 🏃 SINGLE RUN DEEP-DIVE (REFACTORED UI LAYOUT)
 # =========================================================
 elif selected_tab == "🏃 Single Run Deep-Dive":
     st.header("🏃 Activity Telemetry & Dynamic AI Race Analysis")
@@ -549,61 +549,29 @@ elif selected_tab == "🏃 Single Run Deep-Dive":
                     run_tp.at[t_idx, "stride_length_m"] = round(sp_mps / (cad_spm / 60.0), 2)
 
     # ---------------------------------------------------------
-    # DYNAMIC GEMINI AI RACE ANALYSIS CARD (HISTORICAL CONTEXT)
+    # 1. TOP LEVEL: PRIMARY KPI METRIC CARDS
     # ---------------------------------------------------------
-    st.markdown("""<div class="insights-card">
-        <div class="insights-header">
-            <span>🤖 Gemini AI Action-Oriented Coaching Analysis</span>
-        </div>""", unsafe_allow_html=True)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    with col1:
+        ui.metric_card("Distance", f"{run_sum['distance_km']:.2f} km", delta=format_delta(run_sum['distance_km'], prev_run['distance_km'] if prev_run is not None else None, "{:.2f}", "km"), key="sr_mc_1")
+    with col2:
+        ui.metric_card("Duration", f"{run_sum['duration_min']:.1f} min", delta=format_delta(run_sum['duration_min'], prev_run['duration_min'] if prev_run is not None else None, "{:.1f}", "min"), key="sr_mc_2")
+    with col3:
+        ui.metric_card("Avg Pace", f"{run_sum['avg_pace_str']} /km", delta=format_delta(run_sum['avg_pace_min_km'], prev_run['avg_pace_min_km'] if prev_run is not None else None, "{:.2f}", "m/km"), key="sr_mc_3")
+    with col4:
+        ui.metric_card("Avg HR", f"{int(run_sum['avg_heart_rate'])} bpm" if pd.notnull(run_sum['avg_heart_rate']) else "N/A", delta=format_delta(run_sum['avg_heart_rate'], prev_run['avg_heart_rate'] if prev_run is not None else None, "{:.0f}", "bpm"), key="sr_mc_4")
+    with col5:
+        ui.metric_card("Avg Cadence", f"{int(run_sum['avg_cadence_spm'])} spm" if pd.notnull(run_sum['avg_cadence_spm']) else "N/A", delta=format_delta(run_sum['avg_cadence_spm'], prev_run['avg_cadence_spm'] if prev_run is not None else None, "{:.0f}", "spm"), key="sr_mc_5")
+    with col6:
+        stride_m_val = (run_sum['stride_length_cm'] / 100.0) if pd.notnull(run_sum['stride_length_cm']) and run_sum['stride_length_cm'] > 0 else 0.0
+        prev_stride_m = (prev_run['stride_length_cm'] / 100.0) if prev_run is not None and pd.notnull(prev_run.get('stride_length_cm')) else None
+        ui.metric_card("Stride Length", f"{stride_m_val:.2f} m", delta=format_delta(stride_m_val, prev_stride_m, "{:.2f}", "m"), key="sr_mc_6")
 
-    col_ins_h, col_ins_btn = st.columns([4, 1])
-    with col_ins_btn:
-        if st.button("🔄 Re-analyze Run", key=f"btn_reanalyze_{selected_act_id}"):
-            analyze_run_with_gemini.clear()
-            st.rerun()
+    st.markdown("<br>", unsafe_allow_html=True)
 
-    # Build Km-by-Km Lap Breakdown
-    km_splits_summary = []
-    if not run_tp.empty and "distance_m" in run_tp.columns:
-        run_tp["km_split"] = (run_tp["distance_m"] // 1000).astype(int) + 1
-        for km_num, group in run_tp.groupby("km_split"):
-            if km_num > 15:
-                break
-            avg_p = group["pace_min_km"].mean()
-            avg_hr_split = group["heart_rate_bpm"].mean()
-            avg_cad_split = group["cadence_spm"].mean()
-            if pd.notnull(avg_p) and avg_p > 0:
-                p_mins = int(avg_p)
-                p_secs = int(round((avg_p - p_mins) * 60))
-                if p_secs == 60:
-                    p_mins += 1
-                    p_secs = 0
-                p_str = f"{p_mins}:{p_secs:02d}"
-            else:
-                p_str = "N/A"
-            km_splits_summary.append(f"KM {km_num}: Pace {p_str} min/km ({avg_p:.2f}), HR {avg_hr_split:.0f} bpm, Cadence {avg_cad_split:.0f} spm")
-
-    splits_text = "\n".join(km_splits_summary) if km_splits_summary else "Km splits not available."
-
-    # Construct Historical Context Payload from all prior runs
-    past_runs = summary_df[summary_df["activity_id"] != selected_act_id].head(12)
-    hist_lines = []
-    for _, p in past_runs.iterrows():
-        p_date = p["start_time"].strftime("%b %d")
-        p_dist = p["distance_km"]
-        p_run_pace = p.get("run_pace_str") if pd.notnull(p.get("run_pace_str")) else p.get("avg_pace_str")
-        p_hr = p.get("avg_heart_rate")
-        p_cad = p.get("avg_cadence_spm")
-        p_hr_str = f"{p_hr:.0f} bpm" if pd.notnull(p_hr) else "N/A"
-        p_cad_str = f"{p_cad:.0f} spm" if pd.notnull(p_cad) else "N/A"
-        hist_lines.append(f"- {p_date}: {p_dist:.2f} km | Active Run Pace: {p_run_pace}/km | HR: {p_hr_str} | Cadence: {p_cad_str}")
-
-    historical_context_text = "\n".join(hist_lines) if hist_lines else "No prior historical runs."
-
-    thirty_days_ago = summary_df["start_time"].max() - timedelta(days=30)
-    monthly_runs = summary_df[summary_df["start_time"] >= thirty_days_ago]
-    baseline_text = f"30-Day Avg Pace: {monthly_runs['avg_pace_min_km'].mean():.2f} min/km, Avg HR: {monthly_runs['avg_heart_rate'].mean():.0f} bpm, Avg Cadence: {monthly_runs['avg_cadence_spm'].mean():.0f} spm"
-
+    # ---------------------------------------------------------
+    # 2. MIDDLE LEVEL: RUN vs WALK & HR ZONES BREAKDOWNS
+    # ---------------------------------------------------------
     run_dist_val = run_sum.get("run_distance_km") or run_sum["distance_km"]
     run_pace_str_val = run_sum.get("run_pace_str") or run_sum["avg_pace_str"]
     run_dur_val = run_sum.get("run_duration_min") or run_sum["duration_min"]
@@ -611,35 +579,6 @@ elif selected_tab == "🏃 Single Run Deep-Dive":
     walk_pace_str_val = run_sum.get("walk_pace_str") or "N/A"
     walk_dur_val = run_sum.get("walk_duration_min") or 0.0
 
-    run_dict = {
-        "distance_km": run_sum["distance_km"],
-        "duration_min": run_sum["duration_min"],
-        "run_distance_km": run_dist_val,
-        "run_pace_str": run_pace_str_val,
-        "run_pace_min_km": run_sum.get("run_pace_min_km") or run_sum["avg_pace_min_km"],
-        "run_duration_min": run_dur_val,
-        "walk_distance_km": walk_dist_val,
-        "walk_pace_str": walk_pace_str_val,
-        "walk_duration_min": walk_dur_val,
-        "avg_pace_str": run_sum["avg_pace_str"],
-        "avg_pace_min_km": run_sum["avg_pace_min_km"],
-        "avg_heart_rate": run_sum["avg_heart_rate"],
-        "max_heart_rate": run_sum["max_heart_rate"],
-        "avg_cadence_spm": run_sum["avg_cadence_spm"],
-        "stride_length_m": (run_sum["stride_length_cm"] / 100.0) if pd.notnull(run_sum["stride_length_cm"]) else None,
-        "calories": run_sum["calories"],
-        "start_time": run_sum["start_time"].strftime("%Y-%m-%d %H:%M")
-    }
-
-    with st.spinner("🤖 Evaluating Telemetry vs Historical Context & Generating Action Plan..."):
-        analysis_markdown = analyze_run_with_gemini(selected_act_id, run_dict, splits_text, baseline_text, historical_context_text, gemini_key)
-
-    st.markdown(analysis_markdown)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # ---------------------------------------------------------
-    # RUN vs WALK INTERVAL BREAKDOWN & HR ZONES
-    # ---------------------------------------------------------
     col_rw1, col_rw2 = st.columns(2)
 
     with col_rw1:
@@ -708,25 +647,86 @@ elif selected_tab == "🏃 Single Run Deep-Dive":
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Shadcn Metric Cards
-    col1, col2, col3, col4, col5, col6 = st.columns(6)
-    with col1:
-        ui.metric_card("Distance", f"{run_sum['distance_km']:.2f} km", delta=format_delta(run_sum['distance_km'], prev_run['distance_km'] if prev_run is not None else None, "{:.2f}", "km"), key="sr_mc_1")
-    with col2:
-        ui.metric_card("Duration", f"{run_sum['duration_min']:.1f} min", delta=format_delta(run_sum['duration_min'], prev_run['duration_min'] if prev_run is not None else None, "{:.1f}", "min"), key="sr_mc_2")
-    with col3:
-        ui.metric_card("Avg Pace", f"{run_sum['avg_pace_str']} /km", delta=format_delta(run_sum['avg_pace_min_km'], prev_run['avg_pace_min_km'] if prev_run is not None else None, "{:.2f}", "m/km"), key="sr_mc_3")
-    with col4:
-        ui.metric_card("Avg HR", f"{int(run_sum['avg_heart_rate'])} bpm" if pd.notnull(run_sum['avg_heart_rate']) else "N/A", delta=format_delta(run_sum['avg_heart_rate'], prev_run['avg_heart_rate'] if prev_run is not None else None, "{:.0f}", "bpm"), key="sr_mc_4")
-    with col5:
-        ui.metric_card("Avg Cadence", f"{int(run_sum['avg_cadence_spm'])} spm" if pd.notnull(run_sum['avg_cadence_spm']) else "N/A", delta=format_delta(run_sum['avg_cadence_spm'], prev_run['avg_cadence_spm'] if prev_run is not None else None, "{:.0f}", "spm"), key="sr_mc_5")
-    with col6:
-        stride_m_val = (run_sum['stride_length_cm'] / 100.0) if pd.notnull(run_sum['stride_length_cm']) and run_sum['stride_length_cm'] > 0 else 0.0
-        prev_stride_m = (prev_run['stride_length_cm'] / 100.0) if prev_run is not None and pd.notnull(prev_run.get('stride_length_cm')) else None
-        ui.metric_card("Stride Length", f"{stride_m_val:.2f} m", delta=format_delta(stride_m_val, prev_stride_m, "{:.2f}", "m"), key="sr_mc_6")
+    # ---------------------------------------------------------
+    # 3. COLLAPSIBLE AI INSIGHTS ENGINE (st.expander)
+    # ---------------------------------------------------------
+    km_splits_summary = []
+    if not run_tp.empty and "distance_m" in run_tp.columns:
+        run_tp["km_split"] = (run_tp["distance_m"] // 1000).astype(int) + 1
+        for km_num, group in run_tp.groupby("km_split"):
+            if km_num > 15:
+                break
+            avg_p = group["pace_min_km"].mean()
+            avg_hr_split = group["heart_rate_bpm"].mean()
+            avg_cad_split = group["cadence_spm"].mean()
+            if pd.notnull(avg_p) and avg_p > 0:
+                p_mins = int(avg_p)
+                p_secs = int(round((avg_p - p_mins) * 60))
+                if p_secs == 60:
+                    p_mins += 1
+                    p_secs = 0
+                p_str = f"{p_mins}:{p_secs:02d}"
+            else:
+                p_str = "N/A"
+            km_splits_summary.append(f"KM {km_num}: Pace {p_str} min/km ({avg_p:.2f}), HR {avg_hr_split:.0f} bpm, Cadence {avg_cad_split:.0f} spm")
+
+    splits_text = "\n".join(km_splits_summary) if km_splits_summary else "Km splits not available."
+
+    past_runs = summary_df[summary_df["activity_id"] != selected_act_id].head(12)
+    hist_lines = []
+    for _, p in past_runs.iterrows():
+        p_date = p["start_time"].strftime("%b %d")
+        p_dist = p["distance_km"]
+        p_run_pace = p.get("run_pace_str") if pd.notnull(p.get("run_pace_str")) else p.get("avg_pace_str")
+        p_hr = p.get("avg_heart_rate")
+        p_cad = p.get("avg_cadence_spm")
+        p_hr_str = f"{p_hr:.0f} bpm" if pd.notnull(p_hr) else "N/A"
+        p_cad_str = f"{p_cad:.0f} spm" if pd.notnull(p_cad) else "N/A"
+        hist_lines.append(f"- {p_date}: {p_dist:.2f} km | Active Run Pace: {p_run_pace}/km | HR: {p_hr_str} | Cadence: {p_cad_str}")
+
+    historical_context_text = "\n".join(hist_lines) if hist_lines else "No prior historical runs."
+
+    thirty_days_ago = summary_df["start_time"].max() - timedelta(days=30)
+    monthly_runs = summary_df[summary_df["start_time"] >= thirty_days_ago]
+    baseline_text = f"30-Day Avg Pace: {monthly_runs['avg_pace_min_km'].mean():.2f} min/km, Avg HR: {monthly_runs['avg_heart_rate'].mean():.0f} bpm, Avg Cadence: {monthly_runs['avg_cadence_spm'].mean():.0f} spm"
+
+    run_dict = {
+        "distance_km": run_sum["distance_km"],
+        "duration_min": run_sum["duration_min"],
+        "run_distance_km": run_dist_val,
+        "run_pace_str": run_pace_str_val,
+        "run_pace_min_km": run_sum.get("run_pace_min_km") or run_sum["avg_pace_min_km"],
+        "run_duration_min": run_dur_val,
+        "walk_distance_km": walk_dist_val,
+        "walk_pace_str": walk_pace_str_val,
+        "walk_duration_min": walk_dur_val,
+        "avg_pace_str": run_sum["avg_pace_str"],
+        "avg_pace_min_km": run_sum["avg_pace_min_km"],
+        "avg_heart_rate": run_sum["avg_heart_rate"],
+        "max_heart_rate": run_sum["max_heart_rate"],
+        "avg_cadence_spm": run_sum["avg_cadence_spm"],
+        "stride_length_m": (run_sum["stride_length_cm"] / 100.0) if pd.notnull(run_sum["stride_length_cm"]) else None,
+        "calories": run_sum["calories"],
+        "start_time": run_sum["start_time"].strftime("%Y-%m-%d %H:%M")
+    }
+
+    with st.expander("🤖 AI Race Debrief & Actionable Coaching Insights", expanded=False):
+        col_ins_h, col_ins_btn = st.columns([4, 1])
+        with col_ins_btn:
+            if st.button("🔄 Re-analyze Run", key=f"btn_reanalyze_{selected_act_id}"):
+                analyze_run_with_gemini.clear()
+                st.rerun()
+
+        with st.spinner("🤖 Evaluating Telemetry vs Historical Context & Generating Action Plan..."):
+            analysis_markdown = analyze_run_with_gemini(selected_act_id, run_dict, splits_text, baseline_text, historical_context_text, gemini_key)
+
+        st.markdown(analysis_markdown)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
+    # ---------------------------------------------------------
+    # 4. BOTTOM LEVEL: INSTANTANEOUSE PACE & HR TIME-SERIES CHARTS
+    # ---------------------------------------------------------
     if not run_tp.empty:
         fig_pace = px.line(
             run_tp, x="distance_km", y="clean_pace",
