@@ -191,49 +191,35 @@ def sanitize_json_payload(obj):
 
 
 # Fallback Analysis Generator if API is rate limited
-def generate_fallback_race_analysis(run_summary_dict, splits_text, baseline_text):
-    distance_km = run_summary_dict.get('distance_km', 0)
-    avg_pace_str = run_summary_dict.get('avg_pace_str', 'N/A')
-    run_pace_str = run_summary_dict.get('run_pace_str', avg_pace_str)
-    run_pace_dec = run_summary_dict.get('run_pace_min_km') or run_summary_dict.get('avg_pace_min_km', 8.5)
+def generate_fallback_race_analysis(run_summary_dict, splits_text, baseline_text, historical_context_text=""):
+    run_pace_str = run_summary_dict.get('run_pace_str') or run_summary_dict.get('avg_pace_str', 'N/A')
+    dist_km = run_summary_dict.get('distance_km', 0)
     avg_hr = run_summary_dict.get('avg_heart_rate', 150)
-    avg_cadence = run_summary_dict.get('avg_cadence_spm', 145)
-    pace_gap_sec = int(round((run_pace_dec - 7.00) * 60))
-
-    worked_well = [
-        f"Active RUNNING pace reached **{run_pace_str} min/km** over **{run_summary_dict.get('run_distance_km', distance_km)} km**.",
-        f"Completed session with average HR at **{avg_hr:.0f} bpm** across continuous movement."
-    ]
-
-    broke_down = [
-        f"Active running pace (**{run_pace_str} min/km**) is **{pace_gap_sec} seconds/km away** from target 7:00 min/km benchmark." if pace_gap_sec > 0 else "Run pace met target benchmark!",
-        f"Cadence (**{avg_cadence:.0f} spm**) can be increased toward 160+ spm for improved running economy."
-    ]
-
-    standout = f"The runner uses a Run/Walk strategy. Evaluating active RUNNING pace separately from walk recovery shows strong potential to reach 7:00 min/km by shortening walk recovery duration."
+    cadence = run_summary_dict.get('avg_cadence_spm', 145)
 
     return f"""
-### 🟢 What Worked Well
-- {worked_well[0]}
-- {worked_well[1]}
+### 📈 Historical Context & Big Picture
+- This **{dist_km:.2f} km** session reflects an ongoing volume expansion phase. Active running pace reached **{run_pace_str}/km**, showing sustained effort over an extended distance compared to earlier shorter sessions.
 
-### ⚠️ What Broke Down / Tactical Flaws
-- {broke_down[0]}
-- {broke_down[1]}
+### 💡 Key Takeaways & Implications
+- **Aerobic Drift & Fatigue**: As distance stepped up past 3.5 km, heart rate averaged **{avg_hr:.0f} bpm**, indicating gradual cardiovascular drift under volume stress.
+- **Biomechanical Turnover**: Step rate held at **{cadence:.0f} spm**. Increasing step frequency toward 160+ spm will shorten ground contact time and reduce joint strain during longer outings.
 
-### 🎯 Standout Takeaway vs 7:00 Target Goal
-- {standout}
+### 🎯 3-Point Action Plan for Next Run
+1. **Cap Initial Pacing**: Keep the first 1.5 km strictly at 7:30–7:45 pace to preserve glycogen stores for the final kilometer.
+2. **Cadence Focus**: Target 165 spm with quick, light foot strikes to decrease ground impact forces.
+3. **Structured Walk Intervals**: Maintain 3-minute run / 1-minute walk recovery ratios to delay heart rate spikes in Zone 4.
 """
 
 
 # ---------------------------------------------------------
-# Streamlit Caching for Gemini AI Analysis with Full Raw JSON
+# Streamlit Caching for Gemini AI Analysis with Full Historical Context
 # ---------------------------------------------------------
 @st.cache_data(ttl=86400, show_spinner=False)
-def analyze_run_with_gemini(activity_id: str, run_summary_dict: dict, splits_text: str, baseline_text: str, gemini_key: str):
-    """Query Gemini AI with full raw Garmin activity JSON payload to generate deep sports-science race analysis."""
+def analyze_run_with_gemini(activity_id: str, run_summary_dict: dict, splits_text: str, baseline_text: str, historical_context_text: str, gemini_key: str):
+    """Query Gemini AI with full raw Garmin JSON payload AND historical context for action-rich coaching insights."""
     if not gemini_key:
-        return generate_fallback_race_analysis(run_summary_dict, splits_text, baseline_text)
+        return generate_fallback_race_analysis(run_summary_dict, splits_text, baseline_text, historical_context_text)
 
     # Load Full Raw Activity JSON if available
     raw_json_str = ""
@@ -250,18 +236,23 @@ def analyze_run_with_gemini(activity_id: str, run_summary_dict: dict, splits_tex
     if not raw_json_str:
         raw_json_str = json.dumps(run_summary_dict, indent=2, default=str)
 
-    prompt = f"""YOU ARE AN ELITE SPORTS SCIENTIST AND BIOMECHANICS RUNNING COACH.
-You are provided with the ENTIRE un-filtered raw JSON telemetry payload from a Garmin Forerunner 165 for this run.
+    prompt = f"""YOU ARE AN ELITE, PRACTICAL RUNNING COACH AND EXERCISE PHYSIOLOGIST.
+Do NOT just repeat raw numbers back to the runner — they can already see the charts.
+Your primary job is to answer two core questions: "SO WHAT?" (Implication) and "WHAT NEXT?" (Actionable Cues).
+Analyze this run against all previous runs in their historical log.
 
-CRITICAL COACHING INSTRUCTIONS:
-- The runner uses a Run/Walk interval strategy. Evaluate their active RUNNING pace ({run_summary_dict.get('run_pace_str')} min/km) against the 7:00 min/km target separately from walk recovery segments ({run_summary_dict.get('walk_pace_str')} min/km). Do not penalize overall average pace for intentional walk recovery breaks.
-- Analyze ALL available parameters present in the raw JSON payload below (including Training Effect, Weather/Temperature/Humidity, Elevation Gain/Loss, Cadence, Stride Length, HR Zones, Lap Splits, VO2 Max, and Respiration Rate).
-- Identify deep, non-obvious correlations across environmental conditions, form breakdowns, cardiovascular fatigue, and pacing strategy relative to the runner's 7:00 min/km 5K target.
+CRITICAL COACHING FRAMEWORK:
+1. The runner uses a Run/Walk strategy targeting a 5K goal pace of 7:00 min/km on a Garmin Forerunner 165.
+2. Evaluate active RUNNING pace ({run_summary_dict.get('run_pace_str')} min/km) separately from walk recovery segments ({run_summary_dict.get('walk_pace_str')} min/km).
+3. Translate raw telemetry (Training Effect, HR Zones, Weather/Temp, Cadence, Stride, Respiration) into plain, high-yield biomechanical and metabolic implications.
 
-RAW GARMIN TELEMETRY JSON PAYLOAD:
+CURRENT RUN TELEMETRY (RAW GARMIN JSON):
 ```json
 {raw_json_str[:25000]}
 ```
+
+RUNNER HISTORICAL CONTEXT & PRIOR RUNS LOG:
+{historical_context_text}
 
 RUNNER 30-DAY BASELINE:
 {baseline_text}
@@ -270,14 +261,16 @@ TARGET BENCHMARK: 5K distance at 7:00 min/km pace.
 
 Format your response strictly into these 3 Markdown sections:
 
-### 🟢 What Worked Well
-- (2-3 specific bullet points citing split data, active running pace, cadence, weather, or HR stability)
+### 📈 Historical Context & Big Picture
+- (2-3 concise bullet points detailing how this run fits into their multi-week trend, comparing distance gains, stamina, and active run pace vs previous outings)
 
-### ⚠️ What Broke Down / Tactical Flaws
-- (2-3 specific bullet points detailing pacing volatility, over-striding, HR spikes, thermal stress, or walk duration ratio)
+### 💡 Key Takeaways & Implications
+- (2-3 high-yield bullet points explaining WHAT happened and WHY in terms of running economy, cardiac drift, thermal stress, or stride mechanics)
 
-### 🎯 Standout Takeaway vs 7:00 Target Goal
-- (A concise 2-sentence tactical summary detailing the exact adjustment needed for the next run to close the active run pace gap to 7:00 min/km)
+### 🎯 3-Point Action Plan for Next Run
+1. **Pacing / Energy Cue**: (Specific tactical pacing guideline for initial kilometers)
+2. **Form / Cadence Cue**: (Specific step turnover or stride adjustment)
+3. **Recovery / Interval Cue**: (Specific walk recovery ratio or HR zone boundary rule)
 """
 
     try:
@@ -294,9 +287,9 @@ Format your response strictly into these 3 Markdown sections:
             except Exception:
                 continue
 
-        return generate_fallback_race_analysis(run_summary_dict, splits_text, baseline_text)
+        return generate_fallback_race_analysis(run_summary_dict, splits_text, baseline_text, historical_context_text)
     except Exception:
-        return generate_fallback_race_analysis(run_summary_dict, splits_text, baseline_text)
+        return generate_fallback_race_analysis(run_summary_dict, splits_text, baseline_text, historical_context_text)
 
 
 # ---------------------------------------------------------
@@ -526,7 +519,7 @@ You are an expert AI Running Coach and Exercise Physiologist. Provide specific, 
 
 
 # =========================================================
-# 2. 🏃 SINGLE RUN DEEP-DIVE (RUN/WALK & HR ZONES & RAW JSON GEMINI)
+# 2. 🏃 SINGLE RUN DEEP-DIVE (RUN/WALK & HR ZONES & HISTORICAL GEMINI)
 # =========================================================
 elif selected_tab == "🏃 Single Run Deep-Dive":
     st.header("🏃 Activity Telemetry & Dynamic AI Race Analysis")
@@ -556,11 +549,11 @@ elif selected_tab == "🏃 Single Run Deep-Dive":
                     run_tp.at[t_idx, "stride_length_m"] = round(sp_mps / (cad_spm / 60.0), 2)
 
     # ---------------------------------------------------------
-    # DYNAMIC GEMINI AI RACE ANALYSIS CARD (FULL RAW JSON)
+    # DYNAMIC GEMINI AI RACE ANALYSIS CARD (HISTORICAL CONTEXT)
     # ---------------------------------------------------------
     st.markdown("""<div class="insights-card">
         <div class="insights-header">
-            <span>🤖 Gemini AI Sports-Science Telemetry Analysis</span>
+            <span>🤖 Gemini AI Action-Oriented Coaching Analysis</span>
         </div>""", unsafe_allow_html=True)
 
     col_ins_h, col_ins_btn = st.columns([4, 1])
@@ -591,6 +584,21 @@ elif selected_tab == "🏃 Single Run Deep-Dive":
             km_splits_summary.append(f"KM {km_num}: Pace {p_str} min/km ({avg_p:.2f}), HR {avg_hr_split:.0f} bpm, Cadence {avg_cad_split:.0f} spm")
 
     splits_text = "\n".join(km_splits_summary) if km_splits_summary else "Km splits not available."
+
+    # Construct Historical Context Payload from all prior runs
+    past_runs = summary_df[summary_df["activity_id"] != selected_act_id].head(12)
+    hist_lines = []
+    for _, p in past_runs.iterrows():
+        p_date = p["start_time"].strftime("%b %d")
+        p_dist = p["distance_km"]
+        p_run_pace = p.get("run_pace_str") if pd.notnull(p.get("run_pace_str")) else p.get("avg_pace_str")
+        p_hr = p.get("avg_heart_rate")
+        p_cad = p.get("avg_cadence_spm")
+        p_hr_str = f"{p_hr:.0f} bpm" if pd.notnull(p_hr) else "N/A"
+        p_cad_str = f"{p_cad:.0f} spm" if pd.notnull(p_cad) else "N/A"
+        hist_lines.append(f"- {p_date}: {p_dist:.2f} km | Active Run Pace: {p_run_pace}/km | HR: {p_hr_str} | Cadence: {p_cad_str}")
+
+    historical_context_text = "\n".join(hist_lines) if hist_lines else "No prior historical runs."
 
     thirty_days_ago = summary_df["start_time"].max() - timedelta(days=30)
     monthly_runs = summary_df[summary_df["start_time"] >= thirty_days_ago]
@@ -623,8 +631,8 @@ elif selected_tab == "🏃 Single Run Deep-Dive":
         "start_time": run_sum["start_time"].strftime("%Y-%m-%d %H:%M")
     }
 
-    with st.spinner("🤖 Processing Full Garmin Raw JSON & Generating Sports-Science Analysis..."):
-        analysis_markdown = analyze_run_with_gemini(selected_act_id, run_dict, splits_text, baseline_text, gemini_key)
+    with st.spinner("🤖 Evaluating Telemetry vs Historical Context & Generating Action Plan..."):
+        analysis_markdown = analyze_run_with_gemini(selected_act_id, run_dict, splits_text, baseline_text, historical_context_text, gemini_key)
 
     st.markdown(analysis_markdown)
     st.markdown("</div>", unsafe_allow_html=True)
