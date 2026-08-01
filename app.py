@@ -1,4 +1,5 @@
 import os
+import json
 import pandas as pd
 import numpy as np
 import plotly.express as px
@@ -174,6 +175,21 @@ def load_data():
     return summary_df, trackpoints_df
 
 
+def sanitize_json_payload(obj):
+    """Recursively strip non-informative administrative keys from Garmin JSON."""
+    if isinstance(obj, dict):
+        cleaned = {}
+        for k, v in obj.items():
+            if k in ["userProfileId", "activityUUID", "accessControlRuleDTO", "weatherStationDTO", "ownerId", "privacy"]:
+                continue
+            cleaned[k] = sanitize_json_payload(v)
+        return cleaned
+    elif isinstance(obj, list):
+        return [sanitize_json_payload(x) for x in obj]
+    else:
+        return obj
+
+
 # Fallback Analysis Generator if API is rate limited
 def generate_fallback_race_analysis(run_summary_dict, splits_text, baseline_text):
     distance_km = run_summary_dict.get('distance_km', 0)
@@ -211,33 +227,41 @@ def generate_fallback_race_analysis(run_summary_dict, splits_text, baseline_text
 
 
 # ---------------------------------------------------------
-# Streamlit Caching for Gemini AI Analysis
+# Streamlit Caching for Gemini AI Analysis with Full Raw JSON
 # ---------------------------------------------------------
 @st.cache_data(ttl=86400, show_spinner=False)
 def analyze_run_with_gemini(activity_id: str, run_summary_dict: dict, splits_text: str, baseline_text: str, gemini_key: str):
-    """Query Gemini AI to generate dynamic, expert biomechanics and pacing analysis for a specific run."""
+    """Query Gemini AI with full raw Garmin activity JSON payload to generate deep sports-science race analysis."""
     if not gemini_key:
         return generate_fallback_race_analysis(run_summary_dict, splits_text, baseline_text)
 
-    prompt = f"""YOU ARE AN EXPERT BIOMECHANICS & PACING RUNNING COACH.
-Analyze the following telemetry for a runner pursuing a 5K target goal of 7:00 min/km pace on a Garmin Forerunner 165.
+    # Load Full Raw Activity JSON if available
+    raw_json_str = ""
+    raw_json_path = f"data/raw_activity_{activity_id}.json"
+    if os.path.exists(raw_json_path):
+        try:
+            with open(raw_json_path, "r") as f:
+                raw_payload = json.load(f)
+            cleaned_payload = sanitize_json_payload(raw_payload)
+            raw_json_str = json.dumps(cleaned_payload, indent=2, default=str)
+        except Exception as e:
+            raw_json_str = f"Raw JSON load error: {e}"
 
-CRITICAL INSTRUCTION:
-The runner uses a Run/Walk interval strategy. Evaluate their RUNNING pace ({run_summary_dict.get('run_pace_str')} min/km) against the 7:00 min/km target separately from walk recovery segments ({run_summary_dict.get('walk_pace_str')} min/km). Do not penalize overall average pace for intentional walk breaks.
+    if not raw_json_str:
+        raw_json_str = json.dumps(run_summary_dict, indent=2, default=str)
 
-RUN TELEMETRY SUMMARY:
-- Total Distance: {run_summary_dict.get('distance_km')} km
-- Total Duration: {run_summary_dict.get('duration_min')} min
-- Active RUN Segment: {run_summary_dict.get('run_distance_km')} km @ {run_summary_dict.get('run_pace_str')} min/km ({run_summary_dict.get('run_duration_min')} min)
-- Walk Recovery Segment: {run_summary_dict.get('walk_distance_km')} km @ {run_summary_dict.get('walk_pace_str')} min/km ({run_summary_dict.get('walk_duration_min')} min)
-- Overall Average Pace: {run_summary_dict.get('avg_pace_str')} min/km
-- Average Heart Rate: {run_summary_dict.get('avg_heart_rate')} bpm (Max: {run_summary_dict.get('max_heart_rate')} bpm)
-- Average Cadence: {run_summary_dict.get('avg_cadence_spm')} spm
-- Stride Length: {run_summary_dict.get('stride_length_m')} meters
-- Calories Burned: {run_summary_dict.get('calories')} kcal
+    prompt = f"""YOU ARE AN ELITE SPORTS SCIENTIST AND BIOMECHANICS RUNNING COACH.
+You are provided with the ENTIRE un-filtered raw JSON telemetry payload from a Garmin Forerunner 165 for this run.
 
-KM-BY-KM LAP BREAKDOWN:
-{splits_text}
+CRITICAL COACHING INSTRUCTIONS:
+- The runner uses a Run/Walk interval strategy. Evaluate their active RUNNING pace ({run_summary_dict.get('run_pace_str')} min/km) against the 7:00 min/km target separately from walk recovery segments ({run_summary_dict.get('walk_pace_str')} min/km). Do not penalize overall average pace for intentional walk recovery breaks.
+- Analyze ALL available parameters present in the raw JSON payload below (including Training Effect, Weather/Temperature/Humidity, Elevation Gain/Loss, Cadence, Stride Length, HR Zones, Lap Splits, VO2 Max, and Respiration Rate).
+- Identify deep, non-obvious correlations across environmental conditions, form breakdowns, cardiovascular fatigue, and pacing strategy relative to the runner's 7:00 min/km 5K target.
+
+RAW GARMIN TELEMETRY JSON PAYLOAD:
+```json
+{raw_json_str[:25000]}
+```
 
 RUNNER 30-DAY BASELINE:
 {baseline_text}
@@ -247,10 +271,10 @@ TARGET BENCHMARK: 5K distance at 7:00 min/km pace.
 Format your response strictly into these 3 Markdown sections:
 
 ### 🟢 What Worked Well
-- (2-3 specific bullet points citing split data, active running pace, cadence, or HR stability)
+- (2-3 specific bullet points citing split data, active running pace, cadence, weather, or HR stability)
 
 ### ⚠️ What Broke Down / Tactical Flaws
-- (2-3 specific bullet points detailing pacing volatility, over-striding, HR spikes, or walk duration ratio)
+- (2-3 specific bullet points detailing pacing volatility, over-striding, HR spikes, thermal stress, or walk duration ratio)
 
 ### 🎯 Standout Takeaway vs 7:00 Target Goal
 - (A concise 2-sentence tactical summary detailing the exact adjustment needed for the next run to close the active run pace gap to 7:00 min/km)
@@ -502,7 +526,7 @@ You are an expert AI Running Coach and Exercise Physiologist. Provide specific, 
 
 
 # =========================================================
-# 2. 🏃 SINGLE RUN DEEP-DIVE (RUN/WALK & HR ZONES & GEMINI)
+# 2. 🏃 SINGLE RUN DEEP-DIVE (RUN/WALK & HR ZONES & RAW JSON GEMINI)
 # =========================================================
 elif selected_tab == "🏃 Single Run Deep-Dive":
     st.header("🏃 Activity Telemetry & Dynamic AI Race Analysis")
@@ -532,11 +556,11 @@ elif selected_tab == "🏃 Single Run Deep-Dive":
                     run_tp.at[t_idx, "stride_length_m"] = round(sp_mps / (cad_spm / 60.0), 2)
 
     # ---------------------------------------------------------
-    # DYNAMIC GEMINI AI RACE ANALYSIS CARD
+    # DYNAMIC GEMINI AI RACE ANALYSIS CARD (FULL RAW JSON)
     # ---------------------------------------------------------
     st.markdown("""<div class="insights-card">
         <div class="insights-header">
-            <span>🤖 Gemini AI Race Analysis & Coaching Telemetry</span>
+            <span>🤖 Gemini AI Sports-Science Telemetry Analysis</span>
         </div>""", unsafe_allow_html=True)
 
     col_ins_h, col_ins_btn = st.columns([4, 1])
@@ -572,7 +596,6 @@ elif selected_tab == "🏃 Single Run Deep-Dive":
     monthly_runs = summary_df[summary_df["start_time"] >= thirty_days_ago]
     baseline_text = f"30-Day Avg Pace: {monthly_runs['avg_pace_min_km'].mean():.2f} min/km, Avg HR: {monthly_runs['avg_heart_rate'].mean():.0f} bpm, Avg Cadence: {monthly_runs['avg_cadence_spm'].mean():.0f} spm"
 
-    # Extract Run/Walk details from summary row or trackpoints
     run_dist_val = run_sum.get("run_distance_km") or run_sum["distance_km"]
     run_pace_str_val = run_sum.get("run_pace_str") or run_sum["avg_pace_str"]
     run_dur_val = run_sum.get("run_duration_min") or run_sum["duration_min"]
@@ -600,7 +623,7 @@ elif selected_tab == "🏃 Single Run Deep-Dive":
         "start_time": run_sum["start_time"].strftime("%Y-%m-%d %H:%M")
     }
 
-    with st.spinner("🤖 Generating Gemini AI Race Analysis..."):
+    with st.spinner("🤖 Processing Full Garmin Raw JSON & Generating Sports-Science Analysis..."):
         analysis_markdown = analyze_run_with_gemini(selected_act_id, run_dict, splits_text, baseline_text, gemini_key)
 
     st.markdown(analysis_markdown)

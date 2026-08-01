@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
@@ -195,7 +196,7 @@ def process_run_walk_segmentation(tp_df):
 
 
 def extract_trackpoints_and_details(client, summary_df):
-    """Extract raw time-series trackpoints, HR zones, and Run/Walk segmentation for each activity."""
+    """Extract raw time-series trackpoints, HR zones, and Run/Walk segmentation for each activity, and dump full raw JSON."""
     all_trackpoints = []
     enriched_summary = []
 
@@ -206,29 +207,52 @@ def extract_trackpoints_and_details(client, summary_df):
 
         print(f"[{idx+1}/{len(summary_df)}] Fetching details for activity {act_id} ({act_name} - {start_time})...")
 
-        # Fetch HR zones if available
-        hr_z_dict = {"hr_z1_secs": 0, "hr_z2_secs": 0, "hr_z3_secs": 0, "hr_z4_secs": 0, "hr_z5_secs": 0}
+        # 1. Fetch Full Raw Activity JSON payload endpoints
+        full_summary_raw = None
+        splits_raw = None
+        weather_raw = None
+        hr_zones_raw = None
+
+        try:
+            full_summary_raw = client.get_activity(act_id)
+        except Exception as e:
+            print(f"  Warning: Full activity summary failed for {act_id}: {e}")
+
+        try:
+            splits_raw = client.get_activity_splits(act_id)
+        except Exception as e:
+            print(f"  Warning: Activity splits failed for {act_id}: {e}")
+
+        try:
+            weather_raw = client.get_activity_weather(act_id)
+        except Exception as e:
+            print(f"  Warning: Activity weather failed for {act_id}: {e}")
+
         try:
             hr_zones_raw = client.get_activity_hr_in_timezones(act_id)
-            if hr_zones_raw and isinstance(hr_zones_raw, list):
-                for z in hr_zones_raw:
-                    z_num = z.get("zoneNumber")
-                    if z_num in [1, 2, 3, 4, 5]:
-                        hr_z_dict[f"hr_z{z_num}_secs"] = round(z.get("secsInZone", 0), 1)
         except Exception as e:
-            print(f"  Warning: HR zones unavailable for {act_id}: {e}")
+            print(f"  Warning: HR zones failed for {act_id}: {e}")
 
-        # Fetch activity detail trackpoints
+        # Parse HR zones into dict
+        hr_z_dict = {"hr_z1_secs": 0, "hr_z2_secs": 0, "hr_z3_secs": 0, "hr_z4_secs": 0, "hr_z5_secs": 0}
+        if hr_zones_raw and isinstance(hr_zones_raw, list):
+            for z in hr_zones_raw:
+                z_num = z.get("zoneNumber")
+                if z_num in [1, 2, 3, 4, 5]:
+                    hr_z_dict[f"hr_z{z_num}_secs"] = round(z.get("secsInZone", 0), 1)
+
+        # 2. Fetch Activity detail trackpoints
         act_tps = []
+        details_raw = None
         try:
-            details = client.get_activity_details(act_id)
-            if details and "activityDetailMetrics" in details:
+            details_raw = client.get_activity_details(act_id)
+            if details_raw and "activityDetailMetrics" in details_raw:
                 descriptors = {
                     d["metricsIndex"]: d["key"]
-                    for d in details.get("metricDescriptors", [])
+                    for d in details_raw.get("metricDescriptors", [])
                 }
 
-                for item in details.get("activityDetailMetrics", []):
+                for item in details_raw.get("activityDetailMetrics", []):
                     vals = item.get("metrics", [])
                     m_dict = {descriptors.get(i, f"idx_{i}"): vals[i] if i < len(vals) else None for i in range(len(vals))}
 
@@ -275,6 +299,23 @@ def extract_trackpoints_and_details(client, summary_df):
         except Exception as e:
             print(f"  Warning: Details extraction failed for {act_id}: {e}")
 
+        # Save Raw Activity JSON payload to data/raw_activity_{act_id}.json
+        try:
+            raw_payload = {
+                "activity_id": act_id,
+                "summary": full_summary_raw,
+                "splits": splits_raw,
+                "weather": weather_raw,
+                "hr_zones": hr_zones_raw,
+                "details_sample": act_tps[::5] if len(act_tps) > 100 else act_tps
+            }
+            raw_json_path = DATA_DIR / f"raw_activity_{act_id}.json"
+            with open(raw_json_path, "w") as f:
+                json.dump(raw_payload, f, indent=2, default=str)
+            print(f"  Saved raw JSON payload to {raw_json_path}")
+        except Exception as e:
+            print(f"  Warning: Failed saving raw JSON for {act_id}: {e}")
+
         # Compute Run/Walk Segmentation
         act_tp_df = pd.DataFrame(act_tps) if act_tps else pd.DataFrame()
         segment_dict = process_run_walk_segmentation(act_tp_df)
@@ -289,7 +330,7 @@ def extract_trackpoints_and_details(client, summary_df):
 
 
 def fetch_garmin_data():
-    """Main execution function to fetch and save Garmin runs, trackpoints, HR zones, and segmentation."""
+    """Main execution function to fetch and save Garmin runs, trackpoints, HR zones, and full raw JSON payloads."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     client = get_garmin_client()
@@ -305,7 +346,7 @@ def fetch_garmin_data():
         print("No running activities found.")
         return False
 
-    print("\nExtracting trackpoints, HR zones & Run/Walk segmentation...")
+    print("\nExtracting trackpoints, HR zones, Run/Walk segmentation & raw JSON payloads...")
     summary_df, trackpoints_df = extract_trackpoints_and_details(client, raw_summary_df)
 
     runs_summary_path = DATA_DIR / "runs_summary.csv"
