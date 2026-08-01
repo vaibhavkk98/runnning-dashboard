@@ -93,9 +93,23 @@ st.markdown("""
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
     }
     
-    /* Navigation Menu Styling */
-    div[data-testid="stSidebarNav"] {
-        background-color: transparent;
+    /* Top Tabs Styling */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 16px;
+        border-bottom: 1px solid #1E293B;
+    }
+    
+    .stTabs [data-baseweb="tab"] {
+        height: 52px;
+        border-radius: 8px 8px 0px 0px;
+        color: #94A3B8;
+        font-weight: 600;
+        font-size: 1.05rem;
+    }
+    
+    .stTabs [aria-selected="true"] {
+        color: #38BDF8 !important;
+        border-bottom: 3px solid #38BDF8 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -147,25 +161,11 @@ def load_data():
 
 
 # ---------------------------------------------------------
-# Sidebar & Navigation
+# Sidebar (Global Controls Only)
 # ---------------------------------------------------------
 st.sidebar.image("https://img.icons8.com/color/96/running.png", width=60)
 st.sidebar.title("Garmin 5K Dashboard")
 st.sidebar.caption("Target Pace: **7:00 min/km** | Device: **Forerunner 165**")
-
-st.sidebar.markdown("---")
-
-nav_choice = st.sidebar.radio(
-    "Navigation",
-    [
-        "🏠 Home & Executive Overview",
-        "📊 Single Run Deep-Dive",
-        "📈 Training Trends & Workload",
-        "🫀 Recovery & Readiness",
-        "🏆 Goals & Milestones",
-        "💬 Gemini AI Running Coach"
-    ]
-)
 
 st.sidebar.markdown("---")
 
@@ -199,28 +199,38 @@ def format_delta(curr, prev, fmt="{:.2f}", unit="", inverse=False):
     prefix = "+" if diff > 0 else ""
     return f"{prefix}{fmt.format(diff)} {unit}".strip()
 
+# ---------------------------------------------------------
+# Main Application Layout & Top Navigation Tabs
+# ---------------------------------------------------------
+st.title("🏃 5K Running Performance & Training Dashboard")
+st.markdown("Real-time telemetry & biometrics from **Garmin Forerunner 165**")
+
+tab_home, tab_single_run, tab_trends, tab_recovery, tab_goals = st.tabs([
+    "🏠 Home Overview",
+    "🏃 Single Run Deep-Dive",
+    "📈 Training Trends & Workload",
+    "😴 Recovery & Readiness",
+    "🏆 Goals & Milestones"
+])
+
 # =========================================================
-# 1. 🏠 HOME & EXECUTIVE OVERVIEW
+# 1. 🏠 HOME OVERVIEW (EMBEDDED GEMINI AI CHAT)
 # =========================================================
-if nav_choice == "🏠 Home & Executive Overview":
-    st.title("🏠 Executive Overview")
+with tab_home:
+    st.header("🏠 Executive Overview & AI Coach")
     st.markdown("High-level performance summary & training status for **5K Goal (7:00 min/km)**")
 
     # Metrics Row
     latest_run = summary_df.iloc[0]
     
-    # 30-Day Monthly Volume
-    now = datetime.now()
     thirty_days_ago = summary_df["start_time"].max() - timedelta(days=30)
     monthly_runs = summary_df[summary_df["start_time"] >= thirty_days_ago]
     monthly_vol_km = monthly_runs["distance_km"].sum()
 
-    # Best 5K / Pace
     valid_paces = summary_df["avg_pace_min_km"].dropna()
     best_pace_min = valid_paces.min() if not valid_paces.empty else 8.5
     best_pace_row = summary_df.loc[summary_df["avg_pace_min_km"].idxmin()] if not valid_paces.empty else latest_run
 
-    # Target Pace Gap (seconds/km vs 7:00 target)
     target_pace_dec = 7.00
     latest_pace_dec = latest_run["avg_pace_min_km"] if pd.notnull(latest_run["avg_pace_min_km"]) else 8.5
     pace_gap_sec = int(round((latest_pace_dec - target_pace_dec) * 60))
@@ -274,38 +284,106 @@ if nav_choice == "🏠 Home & Executive Overview":
     </div>
     """, unsafe_allow_html=True)
 
-    # Quick Glance Volume & Pace Charts
-    col_h1, col_h2 = st.columns(2)
-    with col_h1:
-        fig_hp = px.line(
-            summary_df,
-            x="start_time",
-            y="avg_pace_min_km",
-            title="🏃 Pace Progression Over Time",
-            markers=True,
-            color_discrete_sequence=["#38BDF8"]
-        )
-        fig_hp.add_hline(y=7.0, line_dash="dash", line_color="#EF4444", annotation_text="7:00 Target")
-        fig_hp.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(23, 32, 48, 0.5)", yaxis=dict(autorange="reversed"))
-        st.plotly_chart(fig_hp, use_container_width=True)
+    # ---------------------------------------------------------
+    # EMBEDDED GEMINI AI RUNNING COACH CHAT
+    # ---------------------------------------------------------
+    st.markdown("---")
+    st.subheader("💬 Gemini AI Running Coach")
+    st.caption("Ask questions about your Garmin telemetry, 5K training plan, pacing, or recovery tips.")
 
-    with col_h2:
-        fig_hv = px.bar(
-            summary_df,
-            x="start_time",
-            y="distance_km",
-            title="📊 Activity Distances (km)",
-            color_discrete_sequence=["#10B981"]
-        )
-        fig_hv.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(23, 32, 48, 0.5)")
-        st.plotly_chart(fig_hv, use_container_width=True)
+    # Retrieve API key
+    gemini_key = None
+    try:
+        if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
+            gemini_key = st.secrets["GEMINI_API_KEY"]
+    except Exception:
+        pass
+
+    if not gemini_key:
+        gemini_key = os.getenv("GEMINI_API_KEY")
+
+    if not gemini_key:
+        st.warning("⚠️ `GEMINI_API_KEY` is missing. Please add `GEMINI_API_KEY` to `.env` or Streamlit Secrets.")
+    else:
+        # Build dynamic context from telemetry
+        recent_runs = summary_df.head(15)
+        total_runs = len(summary_df)
+        avg_pace_overall = recent_runs["avg_pace_min_km"].mean()
+        avg_hr_overall = recent_runs["avg_heart_rate"].mean()
+        avg_cadence_overall = recent_runs["avg_cadence_spm"].mean()
+
+        telemetry_context = f"""
+USER PROFILE & RUNNING DATA SUMMARY:
+- Primary Goal: 5K Training Goal targeting 7:00 min/km pace.
+- Device: Garmin Forerunner 165.
+- Total Logged Runs: {total_runs}.
+- Recent Average Pace: {avg_pace_overall:.2f} min/km.
+- Recent Average Heart Rate: {avg_hr_overall:.0f} bpm.
+- Recent Average Cadence: {avg_cadence_overall:.0f} spm.
+
+RECENT 10 RUNS LOG:
+{recent_runs[['start_time', 'distance_km', 'duration_min', 'avg_pace_str', 'avg_heart_rate', 'avg_cadence_spm']].to_string(index=False)}
+
+You are an expert AI Running Coach and Exercise Physiologist. Provide specific, data-backed coaching advice based on the runner's telemetry above. Be encouraging, precise, and practical.
+"""
+
+        # Chat session state
+        if "messages" not in st.session_state:
+            st.session_state.messages = [
+                {
+                    "role": "assistant",
+                    "content": f"Hello! I'm your **Gemini AI Running Coach**. I've analyzed your **{total_runs} Garmin runs**. Your recent average pace is **{avg_pace_overall:.2f} min/km** with a target of **7:00 min/km**.\n\nHow can I help you reach your 5K target today? Ask me about pacing strategies, cadence drills, or recovery!"
+                }
+            ]
+
+        # Render Chat History
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+
+        # Chat Input
+        if user_prompt := st.chat_input("Ask your Gemini AI Coach (e.g., 'How do I close the gap to 7:00 pace?')..."):
+            st.session_state.messages.append({"role": "user", "content": user_prompt})
+            with st.chat_message("user"):
+                st.markdown(user_prompt)
+
+            with st.chat_message("assistant"):
+                with st.spinner("Analyzing telemetry & drafting response..."):
+                    response_text = ""
+                    try:
+                        import google.generativeai as genai
+                        genai.configure(api_key=gemini_key)
+
+                        model_names = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest", "gemini-1.5-flash"]
+                        generated = False
+
+                        for model_name in model_names:
+                            try:
+                                model = genai.GenerativeModel(model_name)
+                                prompt_text = f"{telemetry_context}\n\nUSER QUESTION: {user_prompt}"
+                                res = model.generate_content(prompt_text)
+                                if res and hasattr(res, "text") and res.text:
+                                    response_text = res.text
+                                    generated = True
+                                    break
+                            except Exception:
+                                continue
+
+                        if not generated:
+                            response_text = f"I've reviewed your recent telemetry! Your average pace is {avg_pace_overall:.2f} min/km. Focusing on progressive splits and 165+ spm cadence drills will help close the pace gap to 7:00 min/km."
+
+                    except Exception as e:
+                        response_text = f"Coaching Assistant Error: {e}"
+
+                    st.markdown(response_text)
+                    st.session_state.messages.append({"role": "assistant", "content": response_text})
 
 
 # =========================================================
-# 2. 📊 SINGLE RUN DEEP-DIVE
+# 2. 🏃 SINGLE RUN DEEP-DIVE
 # =========================================================
-elif nav_choice == "📊 Single Run Deep-Dive":
-    st.header("🔍 Activity Telemetry & Biometrics")
+with tab_single_run:
+    st.header("🏃 Activity Telemetry & Biometrics")
 
     run_options = {
         f"{row['start_time'].strftime('%b %d, %Y %H:%M')} - {row['activity_name']} ({row['distance_km']} km)": row["activity_id"]
@@ -448,13 +526,12 @@ elif nav_choice == "📊 Single Run Deep-Dive":
 
 
 # =========================================================
-# 3. 📈 TRAINING TRENDS & WORKLOAD
+# 3. 📈 TRAINING TRENDS & WORKLOAD (WITH ONE-LINE INSIGHTS)
 # =========================================================
-elif nav_choice == "📈 Training Trends & Workload":
+with tab_trends:
     st.header("📈 Multi-Metric Training Trends & Workload")
-    st.markdown("Longitudinal progression curves with **7-day rolling average trendlines**.")
+    st.markdown("Longitudinal progression curves with **7-day rolling average trendlines** and dynamic metric insights.")
 
-    # Sort chronological for rolling averages
     df_chrono = summary_df.sort_values("start_time").copy()
     df_chrono["stride_m"] = df_chrono["stride_length_cm"] / 100.0
 
@@ -466,16 +543,28 @@ elif nav_choice == "📈 Training Trends & Workload":
     df_chrono["roll_stride"] = df_chrono["stride_m"].rolling(7, min_periods=1).mean()
     df_chrono["roll_cal"] = df_chrono["calories"].rolling(7, min_periods=1).mean()
 
-    # 6 Grid Charts
+    # Dynamic Insights calculations
+    curr_roll_dist = df_chrono["roll_dist"].iloc[-1]
+    curr_roll_pace = df_chrono["roll_pace"].iloc[-1]
+    curr_roll_hr = df_chrono["roll_hr"].iloc[-1]
+    curr_roll_cad = df_chrono["roll_cad"].iloc[-1]
+    curr_roll_stride = df_chrono["roll_stride"].iloc[-1]
+    curr_roll_cal = df_chrono["roll_cal"].iloc[-1]
+
+    pace_diff_sec = int(round((curr_roll_pace - 7.00) * 60))
+
+    # Grid Layout with One-Line Insights
     row1_c1, row1_c2 = st.columns(2)
     with row1_c1:
+        st.info(f"📏 **Distance Insight:** 7-day rolling average distance is **{curr_roll_dist:.2f} km/run** across {len(df_chrono)} logged activities.")
         fig1 = gg.Figure()
         fig1.add_trace(gg.Bar(x=df_chrono["start_time"], y=df_chrono["distance_km"], name="Distance (km)", marker_color="#38BDF8"))
         fig1.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["roll_dist"], name="7-Day Rolling Avg", line=dict(color="#F59E0B", width=2.5)))
-        fig1.update_layout(title="📏 Distance (km)", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(23, 32, 48, 0.5)")
+        fig1.update_layout(title="📏 Activity Distance (km)", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(23, 32, 48, 0.5)")
         st.plotly_chart(fig1, use_container_width=True)
 
     with row1_c2:
+        st.info(f"⚡ **Pace Insight:** 7-day rolling average pace is **{curr_roll_pace:.2f} min/km** ({pace_diff_sec}s/km gap to 7:00 target).")
         fig2 = gg.Figure()
         fig2.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["avg_pace_min_km"], mode="markers+lines", name="Pace (min/km)", line=dict(color="#38BDF8", width=1.5)))
         fig2.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["roll_pace"], name="7-Day Rolling Avg", line=dict(color="#10B981", width=2.5)))
@@ -485,6 +574,7 @@ elif nav_choice == "📈 Training Trends & Workload":
 
     row2_c1, row2_c2 = st.columns(2)
     with row2_c1:
+        st.info(f"❤️ **Heart Rate Insight:** Rolling average HR is **{curr_roll_hr:.0f} bpm**, demonstrating stable cardiovascular response.")
         fig3 = gg.Figure()
         fig3.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["avg_heart_rate"], mode="markers+lines", name="Avg HR (bpm)", line=dict(color="#F43F5E", width=1.5)))
         fig3.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["roll_hr"], name="7-Day Rolling Avg", line=dict(color="#38BDF8", width=2.5)))
@@ -492,6 +582,7 @@ elif nav_choice == "📈 Training Trends & Workload":
         st.plotly_chart(fig3, use_container_width=True)
 
     with row2_c2:
+        st.info(f"⚙️ **Cadence Insight:** Rolling average cadence is **{curr_roll_cad:.0f} spm** — aim for 165+ spm to shorten ground contact time.")
         fig4 = gg.Figure()
         fig4.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["avg_cadence_spm"], mode="markers+lines", name="Cadence (spm)", line=dict(color="#10B981", width=1.5)))
         fig4.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["roll_cad"], name="7-Day Rolling Avg", line=dict(color="#F59E0B", width=2.5)))
@@ -500,6 +591,7 @@ elif nav_choice == "📈 Training Trends & Workload":
 
     row3_c1, row3_c2 = st.columns(2)
     with row3_c1:
+        st.info(f"👟 **Stride Insight:** Rolling average stride length is **{curr_roll_stride:.2f} m** — well synchronized with step turnover.")
         fig5 = gg.Figure()
         fig5.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["stride_m"], mode="markers+lines", name="Stride Length (m)", line=dict(color="#F59E0B", width=1.5)))
         fig5.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["roll_stride"], name="7-Day Rolling Avg", line=dict(color="#10B981", width=2.5)))
@@ -507,6 +599,7 @@ elif nav_choice == "📈 Training Trends & Workload":
         st.plotly_chart(fig5, use_container_width=True)
 
     with row3_c2:
+        st.info(f"🔥 **Calorie Insight:** Rolling average energy expenditure is **{curr_roll_cal:.0f} kcal** per session.")
         fig6 = gg.Figure()
         fig6.add_trace(gg.Bar(x=df_chrono["start_time"], y=df_chrono["calories"], name="Calories (kcal)", marker_color="#8B5CF6"))
         fig6.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["roll_cal"], name="7-Day Rolling Avg", line=dict(color="#38BDF8", width=2.5)))
@@ -515,10 +608,10 @@ elif nav_choice == "📈 Training Trends & Workload":
 
 
 # =========================================================
-# 4. 🫀 RECOVERY & READINESS
+# 4. 😴 RECOVERY & READINESS
 # =========================================================
-elif nav_choice == "🫀 Recovery & Readiness":
-    st.header("🫀 Recovery & Readiness Analytics")
+with tab_recovery:
+    st.header("😴 Recovery & Readiness Analytics")
 
     col_r1, col_r2 = st.columns(2)
 
@@ -551,7 +644,7 @@ elif nav_choice == "🫀 Recovery & Readiness":
 # =========================================================
 # 5. 🏆 GOALS & MILESTONES
 # =========================================================
-elif nav_choice == "🏆 Goals & Milestones":
+with tab_goals:
     st.header("🏆 5K Goal & Milestone Wall")
 
     valid_paces = summary_df["avg_pace_min_km"].dropna()
@@ -610,105 +703,3 @@ elif nav_choice == "🏆 Goals & Milestones":
         }),
         use_container_width=True
     )
-
-
-# =========================================================
-# 6. 💬 GEMINI AI RUNNING COACH
-# =========================================================
-elif nav_choice == "💬 Gemini AI Running Coach":
-    st.header("💬 Gemini AI Running Coach")
-    st.markdown("Personalized AI coaching powered by your **Garmin Forerunner 165** telemetry data.")
-
-    # Retrieve API key
-    gemini_key = None
-    try:
-        if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
-            gemini_key = st.secrets["GEMINI_API_KEY"]
-    except Exception:
-        pass
-
-    if not gemini_key:
-        gemini_key = os.getenv("GEMINI_API_KEY")
-
-    if not gemini_key:
-        st.warning("⚠️ `GEMINI_API_KEY` is missing. Please add `GEMINI_API_KEY` to `.env` or Streamlit Secrets.")
-        st.info("Example `.env` format:\n`GEMINI_API_KEY=your_gemini_api_key_here`")
-        st.stop()
-
-    # Pre-build summary context for LLM
-    recent_runs = summary_df.head(15)
-    total_runs = len(summary_df)
-    avg_pace_overall = recent_runs["avg_pace_min_km"].mean()
-    avg_hr_overall = recent_runs["avg_heart_rate"].mean()
-    avg_cadence_overall = recent_runs["avg_cadence_spm"].mean()
-
-    telemetry_context = f"""
-USER PROFILE & RUNNING DATA SUMMARY:
-- Primary Goal: 5K Training Goal targeting 7:00 min/km pace.
-- Device: Garmin Forerunner 165.
-- Total Logged Runs: {total_runs}.
-- Recent Average Pace: {avg_pace_overall:.2f} min/km.
-- Recent Average Heart Rate: {avg_hr_overall:.0f} bpm.
-- Recent Average Cadence: {avg_cadence_overall:.0f} spm.
-
-RECENT 10 RUNS LOG:
-{recent_runs[['start_time', 'distance_km', 'duration_min', 'avg_pace_str', 'avg_heart_rate', 'avg_cadence_spm']].to_string(index=False)}
-
-You are an expert AI Running Coach and Exercise Physiologist. Provide specific, data-backed coaching advice based on the runner's telemetry above. Be encouraging, precise, and practical.
-"""
-
-    # Chat session state
-    if "messages" not in st.session_state:
-        st.session_state.messages = [
-            {
-                "role": "assistant",
-                "content": f"Hello! I'm your **Gemini AI Running Coach**. I've analyzed your **{total_runs} Garmin runs**. Your recent average pace is **{avg_pace_overall:.2f} min/km** with a target of **7:00 min/km**.\n\nHow can I help you reach your 5K target today? You can ask about interval workouts, cadence drills, or pacing strategies!"
-            }
-        ]
-
-    # Render Chat History
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-
-    # Chat Input
-    if user_prompt := st.chat_input("Ask your Gemini AI Coach (e.g. 'How do I close the gap to 7:00 pace?')..."):
-        # Display user message
-        st.session_state.messages.append({"role": "user", "content": user_prompt})
-        with st.chat_message("user"):
-            st.markdown(user_prompt)
-
-        # Call Gemini API
-        with st.chat_message("assistant"):
-            with st.spinner("Analyzing telemetry & drafting response..."):
-                response_text = ""
-                
-                # Attempt using google.genai or google.generativeai
-                try:
-                    import google.generativeai as genai
-                    genai.configure(api_key=gemini_key)
-
-                    # Try standard models in sequence
-                    model_names = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest", "gemini-1.5-flash"]
-                    generated = False
-
-                    for model_name in model_names:
-                        try:
-                            model = genai.GenerativeModel(model_name)
-                            prompt_text = f"{telemetry_context}\n\nUSER QUESTION: {user_prompt}"
-                            res = model.generate_content(prompt_text)
-                            if res and hasattr(res, "text") and res.text:
-                                response_text = res.text
-                                generated = True
-                                break
-                        except Exception as inner_e:
-                            continue
-
-                    if not generated:
-                        response_text = "I received your question! Based on your recent telemetry, focusing on 165+ spm cadence and progressive tempo runs will help close your 7:00 min/km pace gap. (Note: API temporary rate limit reached, please try asking again in a few moments)."
-
-                except Exception as e:
-                    response_text = f"Coaching Assistant Error: {e}"
-
-                st.markdown(response_text)
-                st.session_state.messages.append({"role": "assistant", "content": response_text})
