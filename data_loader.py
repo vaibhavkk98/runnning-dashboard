@@ -94,6 +94,7 @@ def parse_runs(activities):
         distance_m = act.get("distance", 0) or 0
         duration_s = act.get("duration", 0) or 0
         avg_speed_mps = act.get("averageSpeed", 0) or 0
+        avg_cadence_spm = act.get("averageRunningCadenceInStepsPerMinute")
 
         distance_km = round(distance_m / 1000.0, 3)
         duration_min = round(duration_s / 60.0, 2)
@@ -111,6 +112,13 @@ def parse_runs(activities):
             avg_pace_dec = None
             avg_pace_str = "N/A"
 
+        # Stride length in cm: if Garmin returns null/0, derive dynamically: Speed (m/s) / (Cadence spm / 60) * 100
+        stride_cm = act.get("strideLength")
+        if (stride_cm is None or stride_cm == 0) and avg_speed_mps > 0 and avg_cadence_spm and avg_cadence_spm > 0:
+            steps_per_sec = avg_cadence_spm / 60.0
+            stride_m = avg_speed_mps / steps_per_sec
+            stride_cm = round(stride_m * 100.0, 2)
+
         summary_list.append({
             "activity_id": act_id,
             "activity_name": act.get("activityName"),
@@ -122,8 +130,8 @@ def parse_runs(activities):
             "avg_pace_str": avg_pace_str,
             "avg_heart_rate": act.get("averageHR"),
             "max_heart_rate": act.get("maxHR"),
-            "avg_cadence_spm": act.get("averageRunningCadenceInStepsPerMinute"),
-            "stride_length_cm": act.get("strideLength"),
+            "avg_cadence_spm": avg_cadence_spm,
+            "stride_length_cm": round(stride_cm, 2) if stride_cm is not None else None,
             "elevation_gain_m": act.get("elevationGain"),
             "calories": act.get("calories"),
             "vo2_max": act.get("vO2MaxValue"),
@@ -184,9 +192,15 @@ def extract_trackpoints(client, summary_df):
                 if single_cadence is not None:
                     cadence = single_cadence * 2
 
-            # Stride length in meters
+            # Stride length in meters: if missing, derive dynamically: Speed (m/s) / (Cadence / 60)
             stride_cm = m_dict.get("directStrideLength")
-            stride_m = (stride_cm / 100.0) if stride_cm is not None else None
+            if stride_cm is not None and stride_cm > 0:
+                stride_m = stride_cm / 100.0
+            elif speed_mps is not None and speed_mps > 0 and cadence is not None and cadence > 0:
+                steps_per_sec = cadence / 60.0
+                stride_m = speed_mps / steps_per_sec
+            else:
+                stride_m = None
 
             all_trackpoints.append({
                 "activity_id": act_id,
@@ -198,7 +212,7 @@ def extract_trackpoints(client, summary_df):
                 "pace_min_km": round(pace_min_km, 3) if pace_min_km is not None else None,
                 "heart_rate_bpm": m_dict.get("directHeartRate"),
                 "cadence_spm": cadence,
-                "stride_length_m": round(stride_m, 3) if stride_m is not None else None,
+                "stride_length_m": round(stride_m, 2) if stride_m is not None else None,
                 "elevation_m": m_dict.get("directElevation"),
                 "latitude": m_dict.get("directLatitude"),
                 "longitude": m_dict.get("directLongitude"),
