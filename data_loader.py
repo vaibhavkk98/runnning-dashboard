@@ -77,6 +77,18 @@ def get_garmin_client() -> Garmin:
         raise
 
 
+def format_pace(pace_dec):
+    """Format decimal pace into M:SS string."""
+    if pace_dec and pace_dec > 0:
+        mins = int(pace_dec)
+        secs = int(round((pace_dec - mins) * 60))
+        if secs == 60:
+            mins += 1
+            secs = 0
+        return f"{mins}:{secs:02d}"
+    return "N/A"
+
+
 def parse_runs(activities):
     """Extract summary information for running activities."""
     summary_list = []
@@ -103,18 +115,13 @@ def parse_runs(activities):
         if avg_speed_mps > 0:
             avg_pace_dec = (1000.0 / avg_speed_mps) / 60.0
             avg_pace_sec = round(avg_pace_dec * 60.0, 1)
-            pace_mins = int(avg_pace_dec)
-            pace_secs = int(round((avg_pace_dec - pace_mins) * 60))
-            if pace_secs == 60:
-                pace_mins += 1
-                pace_secs = 0
-            avg_pace_str = f"{pace_mins}:{pace_secs:02d}"
+            avg_pace_str = format_pace(avg_pace_dec)
         else:
             avg_pace_dec = None
             avg_pace_sec = None
             avg_pace_str = "N/A"
 
-        # Stride length in cm: if Garmin returns null/0, derive dynamically: Speed (m/s) / (Cadence spm / 60) * 100
+        # Stride length in cm: if Garmin returns null/0, derive dynamically
         stride_cm = act.get("strideLength")
         if (stride_cm is None or stride_cm == 0) and avg_speed_mps > 0 and avg_cadence_spm and avg_cadence_spm > 0:
             steps_per_sec = avg_cadence_spm / 60.0
@@ -143,89 +150,146 @@ def parse_runs(activities):
     return pd.DataFrame(summary_list)
 
 
-def extract_trackpoints(client, summary_df):
-    """Extract raw time-series trackpoints for each running activity."""
+def process_run_walk_segmentation(tp_df):
+    """Segment trackpoints into Running (>=120 spm), Walking (30-119 spm), and Idle (<30 spm)."""
+    if tp_df.empty:
+        return {}
+
+    tp_df = tp_df.copy()
+    tp_df["cadence_spm"] = tp_df["cadence_spm"].fillna(0)
+    tp_df["speed_mps"] = tp_df["speed_mps"].fillna(0)
+
+    run_mask = tp_df["cadence_spm"] >= 120
+    walk_mask = (tp_df["cadence_spm"] >= 30) & (tp_df["cadence_spm"] < 120)
+    idle_mask = tp_df["cadence_spm"] < 30
+
+    tp_run = tp_df[run_mask]
+    tp_walk = tp_df[walk_mask]
+    tp_idle = tp_df[idle_mask]
+
+    # Assume sampling interval ~2s
+    run_sec = len(tp_run) * 2
+    walk_sec = len(tp_walk) * 2
+    idle_sec = len(tp_idle) * 2
+
+    run_dist_m = tp_run["speed_mps"].sum() * 2
+    walk_dist_m = tp_walk["speed_mps"].sum() * 2
+
+    run_speed_avg = tp_run["speed_mps"].mean() if len(tp_run) > 0 else 0
+    walk_speed_avg = tp_walk["speed_mps"].mean() if len(tp_walk) > 0 else 0
+
+    run_pace_dec = (1000.0 / run_speed_avg) / 60.0 if run_speed_avg > 0 else None
+    walk_pace_dec = (1000.0 / walk_speed_avg) / 60.0 if walk_speed_avg > 0 else None
+
+    return {
+        "run_duration_min": round(run_sec / 60.0, 1),
+        "run_distance_km": round(run_dist_m / 1000.0, 2),
+        "run_pace_min_km": round(run_pace_dec, 2) if run_pace_dec else None,
+        "run_pace_str": format_pace(run_pace_dec),
+        "walk_duration_min": round(walk_sec / 60.0, 1),
+        "walk_distance_km": round(walk_dist_m / 1000.0, 2),
+        "walk_pace_min_km": round(walk_pace_dec, 2) if walk_pace_dec else None,
+        "walk_pace_str": format_pace(walk_pace_dec),
+        "idle_duration_min": round(idle_sec / 60.0, 1),
+    }
+
+
+def extract_trackpoints_and_details(client, summary_df):
+    """Extract raw time-series trackpoints, HR zones, and Run/Walk segmentation for each activity."""
     all_trackpoints = []
+    enriched_summary = []
 
     for idx, row in summary_df.iterrows():
         act_id = row["activity_id"]
         start_time = row["start_time"]
         act_name = row["activity_name"]
 
-        print(f"[{idx+1}/{len(summary_df)}] Fetching trackpoints for activity {act_id} ({act_name} - {start_time})...")
+        print(f"[{idx+1}/{len(summary_df)}] Fetching details for activity {act_id} ({act_name} - {start_time})...")
 
+        # Fetch HR zones if available
+        hr_z_dict = {"hr_z1_secs": 0, "hr_z2_secs": 0, "hr_z3_secs": 0, "hr_z4_secs": 0, "hr_z5_secs": 0}
+        try:
+            hr_zones_raw = client.get_activity_hr_in_timezones(act_id)
+            if hr_zones_raw and isinstance(hr_zones_raw, list):
+                for z in hr_zones_raw:
+                    z_num = z.get("zoneNumber")
+                    if z_num in [1, 2, 3, 4, 5]:
+                        hr_z_dict[f"hr_z{z_num}_secs"] = round(z.get("secsInZone", 0), 1)
+        except Exception as e:
+            print(f"  Warning: HR zones unavailable for {act_id}: {e}")
+
+        # Fetch activity detail trackpoints
+        act_tps = []
         try:
             details = client.get_activity_details(act_id)
+            if details and "activityDetailMetrics" in details:
+                descriptors = {
+                    d["metricsIndex"]: d["key"]
+                    for d in details.get("metricDescriptors", [])
+                }
+
+                for item in details.get("activityDetailMetrics", []):
+                    vals = item.get("metrics", [])
+                    m_dict = {descriptors.get(i, f"idx_{i}"): vals[i] if i < len(vals) else None for i in range(len(vals))}
+
+                    ts_raw = m_dict.get("directTimestamp")
+                    if ts_raw is None:
+                        continue
+
+                    ts_dt = pd.to_datetime(ts_raw, unit="ms", errors="coerce")
+
+                    speed_mps = m_dict.get("directSpeed")
+                    pace_min_km = (1000.0 / speed_mps) / 60.0 if speed_mps and speed_mps > 0 else None
+
+                    cadence = m_dict.get("directDoubleCadence")
+                    if cadence is None or cadence == 0:
+                        single_cadence = m_dict.get("directRunCadence")
+                        if single_cadence is not None:
+                            cadence = single_cadence * 2
+
+                    stride_cm = m_dict.get("directStrideLength")
+                    if stride_cm is not None and stride_cm > 0:
+                        stride_m = stride_cm / 100.0
+                    elif speed_mps and speed_mps > 0 and cadence and cadence > 0:
+                        stride_m = speed_mps / (cadence / 60.0)
+                    else:
+                        stride_m = None
+
+                    tp_obj = {
+                        "activity_id": act_id,
+                        "start_time": start_time,
+                        "timestamp": ts_dt,
+                        "distance_m": m_dict.get("sumDistance"),
+                        "duration_s": m_dict.get("sumDuration"),
+                        "speed_mps": speed_mps,
+                        "pace_min_km": round(pace_min_km, 3) if pace_min_km else None,
+                        "heart_rate_bpm": m_dict.get("directHeartRate"),
+                        "cadence_spm": cadence,
+                        "stride_length_m": round(stride_m, 2) if stride_m else None,
+                        "elevation_m": m_dict.get("directElevation"),
+                        "latitude": m_dict.get("directLatitude"),
+                        "longitude": m_dict.get("directLongitude"),
+                    }
+                    all_trackpoints.append(tp_obj)
+                    act_tps.append(tp_obj)
         except Exception as e:
-            print(f"  Warning: Failed to get details for activity {act_id}: {e}")
-            continue
+            print(f"  Warning: Details extraction failed for {act_id}: {e}")
 
-        if not details or "activityDetailMetrics" not in details:
-            print(f"  No detail metrics found for activity {act_id}.")
-            continue
+        # Compute Run/Walk Segmentation
+        act_tp_df = pd.DataFrame(act_tps) if act_tps else pd.DataFrame()
+        segment_dict = process_run_walk_segmentation(act_tp_df)
 
-        # Map metric index to key descriptor name
-        descriptors = {
-            d["metricsIndex"]: d["key"]
-            for d in details.get("metricDescriptors", [])
-        }
+        # Merge summary record
+        row_dict = row.to_dict()
+        row_dict.update(hr_z_dict)
+        row_dict.update(segment_dict)
+        enriched_summary.append(row_dict)
 
-        metrics_list = details.get("activityDetailMetrics", [])
-
-        for item in metrics_list:
-            vals = item.get("metrics", [])
-            m_dict = {descriptors.get(i, f"idx_{i}"): vals[i] if i < len(vals) else None for i in range(len(vals))}
-
-            ts_raw = m_dict.get("directTimestamp")
-            if ts_raw is None:
-                continue
-
-            ts_dt = pd.to_datetime(ts_raw, unit="ms", errors="coerce")
-
-            speed_mps = m_dict.get("directSpeed")
-            if speed_mps is not None and speed_mps > 0:
-                pace_min_km = (1000.0 / speed_mps) / 60.0
-            else:
-                pace_min_km = None
-
-            # Cadence (spm)
-            cadence = m_dict.get("directDoubleCadence")
-            if cadence is None or cadence == 0:
-                single_cadence = m_dict.get("directRunCadence")
-                if single_cadence is not None:
-                    cadence = single_cadence * 2
-
-            # Stride length in meters: if missing, derive dynamically: Speed (m/s) / (Cadence / 60)
-            stride_cm = m_dict.get("directStrideLength")
-            if stride_cm is not None and stride_cm > 0:
-                stride_m = stride_cm / 100.0
-            elif speed_mps is not None and speed_mps > 0 and cadence is not None and cadence > 0:
-                steps_per_sec = cadence / 60.0
-                stride_m = speed_mps / steps_per_sec
-            else:
-                stride_m = None
-
-            all_trackpoints.append({
-                "activity_id": act_id,
-                "start_time": start_time,
-                "timestamp": ts_dt,
-                "distance_m": m_dict.get("sumDistance"),
-                "duration_s": m_dict.get("sumDuration"),
-                "speed_mps": speed_mps,
-                "pace_min_km": round(pace_min_km, 3) if pace_min_km is not None else None,
-                "heart_rate_bpm": m_dict.get("directHeartRate"),
-                "cadence_spm": cadence,
-                "stride_length_m": round(stride_m, 2) if stride_m is not None else None,
-                "elevation_m": m_dict.get("directElevation"),
-                "latitude": m_dict.get("directLatitude"),
-                "longitude": m_dict.get("directLongitude"),
-            })
-
-    return pd.DataFrame(all_trackpoints)
+    return pd.DataFrame(enriched_summary), pd.DataFrame(all_trackpoints)
 
 
 def fetch_garmin_data():
-    """Main execution function to fetch and save Garmin runs and trackpoints."""
+    """Main execution function to fetch and save Garmin runs, trackpoints, HR zones, and segmentation."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     client = get_garmin_client()
@@ -234,19 +298,19 @@ def fetch_garmin_data():
     activities = client.get_activities(0, 100)
     print(f"Retrieved {len(activities)} total activities.")
 
-    summary_df = parse_runs(activities)
-    print(f"Filtered {len(summary_df)} running activities.")
+    raw_summary_df = parse_runs(activities)
+    print(f"Filtered {len(raw_summary_df)} running activities.")
 
-    if summary_df.empty:
+    if raw_summary_df.empty:
         print("No running activities found.")
         return False
+
+    print("\nExtracting trackpoints, HR zones & Run/Walk segmentation...")
+    summary_df, trackpoints_df = extract_trackpoints_and_details(client, raw_summary_df)
 
     runs_summary_path = DATA_DIR / "runs_summary.csv"
     summary_df.to_csv(runs_summary_path, index=False)
     print(f"Saved activity summaries to {runs_summary_path}")
-
-    print("\nExtracting raw trackpoints...")
-    trackpoints_df = extract_trackpoints(client, summary_df)
 
     raw_trackpoints_path = DATA_DIR / "raw_trackpoints.csv"
     trackpoints_df.to_csv(raw_trackpoints_path, index=False)

@@ -6,7 +6,6 @@ import plotly.graph_objects as gg
 from plotly.subplots import make_subplots
 import streamlit as st
 from datetime import datetime, timedelta
-from streamlit_option_menu import option_menu
 import streamlit_shadcn_ui as ui
 from data_loader import fetch_garmin_data
 
@@ -27,7 +26,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for Sleek High-End Dark Theme (#0F172A / #1E293B)
+# Custom CSS for Sleek High-End Dark Theme & Segmented Top Nav
 st.markdown("""
 <style>
     .stApp {
@@ -94,6 +93,38 @@ st.markdown("""
         padding: 14px 18px;
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
     }
+
+    /* Horizontal Radio Segmented Top Nav */
+    div[data-testid="stRadio"] > div {
+        flex-direction: row;
+        justify-content: center;
+        background-color: #0F172A;
+        padding: 6px;
+        border-radius: 14px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        gap: 8px;
+        margin-bottom: 20px;
+    }
+
+    div[data-testid="stRadio"] label {
+        background: rgba(30, 41, 59, 0.6);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        padding: 10px 18px;
+        border-radius: 10px;
+        color: #94A3B8;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s ease-in-out;
+    }
+
+    div[data-testid="stRadio"] label:hover {
+        background: rgba(59, 130, 246, 0.2);
+        color: #F8FAFC;
+    }
+
+    div[data-testid="stRadio"] input:checked + div {
+        color: #FFFFFF !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -147,22 +178,23 @@ def load_data():
 def generate_fallback_race_analysis(run_summary_dict, splits_text, baseline_text):
     distance_km = run_summary_dict.get('distance_km', 0)
     avg_pace_str = run_summary_dict.get('avg_pace_str', 'N/A')
-    avg_pace_dec = run_summary_dict.get('avg_pace_min_km', 8.5)
+    run_pace_str = run_summary_dict.get('run_pace_str', avg_pace_str)
+    run_pace_dec = run_summary_dict.get('run_pace_min_km') or run_summary_dict.get('avg_pace_min_km', 8.5)
     avg_hr = run_summary_dict.get('avg_heart_rate', 150)
     avg_cadence = run_summary_dict.get('avg_cadence_spm', 145)
-    pace_gap_sec = int(round((avg_pace_dec - 7.00) * 60))
+    pace_gap_sec = int(round((run_pace_dec - 7.00) * 60))
 
     worked_well = [
-        f"Completed **{distance_km:.2f} km** with an average heart rate of **{avg_hr:.0f} bpm**.",
-        f"Cadence averaged **{avg_cadence:.0f} spm**, maintaining continuous aerobic motion."
+        f"Active RUNNING pace reached **{run_pace_str} min/km** over **{run_summary_dict.get('run_distance_km', distance_km)} km**.",
+        f"Completed session with average HR at **{avg_hr:.0f} bpm** across continuous movement."
     ]
 
     broke_down = [
-        f"Average pace (**{avg_pace_str} min/km**) is **{pace_gap_sec} seconds/km slower** than target 7:00 min/km benchmark.",
-        f"Step rate ({avg_cadence:.0f} spm) can be increased to 165+ spm to shorten ground contact time."
+        f"Active running pace (**{run_pace_str} min/km**) is **{pace_gap_sec} seconds/km away** from target 7:00 min/km benchmark." if pace_gap_sec > 0 else "Run pace met target benchmark!",
+        f"Cadence (**{avg_cadence:.0f} spm**) can be increased toward 160+ spm for improved running economy."
     ]
 
-    standout = f"To close the **{pace_gap_sec}s/km gap** to 7:00 min/km, incorporate 400m interval repeats at 6:45 pace and focus on quick, light foot strikes."
+    standout = f"The runner uses a Run/Walk strategy. Evaluating active RUNNING pace separately from walk recovery shows strong potential to reach 7:00 min/km by shortening walk recovery duration."
 
     return f"""
 ### 🟢 What Worked Well
@@ -190,15 +222,19 @@ def analyze_run_with_gemini(activity_id: str, run_summary_dict: dict, splits_tex
     prompt = f"""YOU ARE AN EXPERT BIOMECHANICS & PACING RUNNING COACH.
 Analyze the following telemetry for a runner pursuing a 5K target goal of 7:00 min/km pace on a Garmin Forerunner 165.
 
+CRITICAL INSTRUCTION:
+The runner uses a Run/Walk interval strategy. Evaluate their RUNNING pace ({run_summary_dict.get('run_pace_str')} min/km) against the 7:00 min/km target separately from walk recovery segments ({run_summary_dict.get('walk_pace_str')} min/km). Do not penalize overall average pace for intentional walk breaks.
+
 RUN TELEMETRY SUMMARY:
-- Distance: {run_summary_dict.get('distance_km')} km
+- Total Distance: {run_summary_dict.get('distance_km')} km
 - Total Duration: {run_summary_dict.get('duration_min')} min
-- Average Pace: {run_summary_dict.get('avg_pace_str')} min/km ({run_summary_dict.get('avg_pace_min_km')} min/km)
+- Active RUN Segment: {run_summary_dict.get('run_distance_km')} km @ {run_summary_dict.get('run_pace_str')} min/km ({run_summary_dict.get('run_duration_min')} min)
+- Walk Recovery Segment: {run_summary_dict.get('walk_distance_km')} km @ {run_summary_dict.get('walk_pace_str')} min/km ({run_summary_dict.get('walk_duration_min')} min)
+- Overall Average Pace: {run_summary_dict.get('avg_pace_str')} min/km
 - Average Heart Rate: {run_summary_dict.get('avg_heart_rate')} bpm (Max: {run_summary_dict.get('max_heart_rate')} bpm)
 - Average Cadence: {run_summary_dict.get('avg_cadence_spm')} spm
 - Stride Length: {run_summary_dict.get('stride_length_m')} meters
 - Calories Burned: {run_summary_dict.get('calories')} kcal
-- Date: {run_summary_dict.get('start_time')}
 
 KM-BY-KM LAP BREAKDOWN:
 {splits_text}
@@ -208,19 +244,16 @@ RUNNER 30-DAY BASELINE:
 
 TARGET BENCHMARK: 5K distance at 7:00 min/km pace.
 
-INSTRUCTIONS:
-Provide a deep, highly specific, data-backed analysis evaluating pacing strategy (positive/negative splits), cardiac drift, cadence stability, and terrain/form efficiency.
-
 Format your response strictly into these 3 Markdown sections:
 
 ### 🟢 What Worked Well
-- (2-3 specific bullet points citing split data, cadence, or HR stability)
+- (2-3 specific bullet points citing split data, active running pace, cadence, or HR stability)
 
 ### ⚠️ What Broke Down / Tactical Flaws
-- (2-3 specific bullet points detailing pacing volatility, over-striding, HR spikes, or cadence drops)
+- (2-3 specific bullet points detailing pacing volatility, over-striding, HR spikes, or walk duration ratio)
 
 ### 🎯 Standout Takeaway vs 7:00 Target Goal
-- (A concise 2-sentence tactical summary detailing the exact adjustment needed for the next run to close the pace gap to 7:00 min/km)
+- (A concise 2-sentence tactical summary detailing the exact adjustment needed for the next run to close the active run pace gap to 7:00 min/km)
 """
 
     try:
@@ -282,22 +315,27 @@ def format_delta(curr, prev, fmt="{:.2f}", unit="", inverse=False):
     return f"{prefix}{fmt.format(diff)} {unit}".strip()
 
 # ---------------------------------------------------------
-# Top Navigation Bar (Option Menu with Glowing Active Tabs)
+# Robust Top Navigation Bar (Linked to st.session_state)
 # ---------------------------------------------------------
 st.title("🏃 5K Running Performance Dashboard")
 
-selected_tab = option_menu(
-    menu_title=None,
-    options=["Home Overview", "Single Run Deep-Dive", "Training Trends & Workload", "Recovery & Readiness", "Goals & Milestones"],
-    icons=["house-fill", "activity", "line-chart", "moon-stars-fill", "trophy-fill"],
-    default_index=0,
-    orientation="horizontal",
-    styles={
-        "container": {"padding": "4px!important", "background-color": "#0F172A", "border-radius": "12px", "border": "1px solid rgba(255,255,255,0.08)", "margin-bottom": "20px"},
-        "icon": {"color": "#3B82F6", "font-size": "16px"},
-        "nav-link": {"font-size": "14px", "text-align": "center", "margin": "0px", "--hover-color": "#1E293B", "color": "#94A3B8", "font-weight": "500"},
-        "nav-link-selected": {"background-color": "#3B82F6", "color": "#FFFFFF", "font-weight": "600", "border-radius": "8px"},
-    }
+nav_options = [
+    "🏠 Home Overview",
+    "🏃 Single Run Deep-Dive",
+    "📈 Training Trends & Workload",
+    "😴 Recovery & Readiness",
+    "🏆 Goals & Milestones"
+]
+
+if "navigation_tab" not in st.session_state:
+    st.session_state["navigation_tab"] = nav_options[0]
+
+selected_tab = st.radio(
+    label="Navigation Tabs",
+    options=nav_options,
+    key="navigation_tab",
+    label_visibility="collapsed",
+    horizontal=True
 )
 
 # Fetch Gemini Key
@@ -314,7 +352,7 @@ if not gemini_key:
 # =========================================================
 # 1. 🏠 HOME OVERVIEW (EMBEDDED GEMINI AI CHAT)
 # =========================================================
-if selected_tab == "Home Overview":
+if selected_tab == "🏠 Home Overview":
     st.header("🏠 Executive Overview & AI Coach")
     st.markdown("High-level performance summary & training status for **5K Goal (7:00 min/km)**")
 
@@ -464,9 +502,9 @@ You are an expert AI Running Coach and Exercise Physiologist. Provide specific, 
 
 
 # =========================================================
-# 2. 🏃 SINGLE RUN DEEP-DIVE (DYNAMIC GEMINI RACE ANALYSIS)
+# 2. 🏃 SINGLE RUN DEEP-DIVE (RUN/WALK & HR ZONES & GEMINI)
 # =========================================================
-elif selected_tab == "Single Run Deep-Dive":
+elif selected_tab == "🏃 Single Run Deep-Dive":
     st.header("🏃 Activity Telemetry & Dynamic AI Race Analysis")
 
     run_options = {
@@ -534,9 +572,24 @@ elif selected_tab == "Single Run Deep-Dive":
     monthly_runs = summary_df[summary_df["start_time"] >= thirty_days_ago]
     baseline_text = f"30-Day Avg Pace: {monthly_runs['avg_pace_min_km'].mean():.2f} min/km, Avg HR: {monthly_runs['avg_heart_rate'].mean():.0f} bpm, Avg Cadence: {monthly_runs['avg_cadence_spm'].mean():.0f} spm"
 
+    # Extract Run/Walk details from summary row or trackpoints
+    run_dist_val = run_sum.get("run_distance_km") or run_sum["distance_km"]
+    run_pace_str_val = run_sum.get("run_pace_str") or run_sum["avg_pace_str"]
+    run_dur_val = run_sum.get("run_duration_min") or run_sum["duration_min"]
+    walk_dist_val = run_sum.get("walk_distance_km") or 0.0
+    walk_pace_str_val = run_sum.get("walk_pace_str") or "N/A"
+    walk_dur_val = run_sum.get("walk_duration_min") or 0.0
+
     run_dict = {
         "distance_km": run_sum["distance_km"],
         "duration_min": run_sum["duration_min"],
+        "run_distance_km": run_dist_val,
+        "run_pace_str": run_pace_str_val,
+        "run_pace_min_km": run_sum.get("run_pace_min_km") or run_sum["avg_pace_min_km"],
+        "run_duration_min": run_dur_val,
+        "walk_distance_km": walk_dist_val,
+        "walk_pace_str": walk_pace_str_val,
+        "walk_duration_min": walk_dur_val,
         "avg_pace_str": run_sum["avg_pace_str"],
         "avg_pace_min_km": run_sum["avg_pace_min_km"],
         "avg_heart_rate": run_sum["avg_heart_rate"],
@@ -552,6 +605,77 @@ elif selected_tab == "Single Run Deep-Dive":
 
     st.markdown(analysis_markdown)
     st.markdown("</div>", unsafe_allow_html=True)
+
+    # ---------------------------------------------------------
+    # RUN vs WALK INTERVAL BREAKDOWN & HR ZONES
+    # ---------------------------------------------------------
+    col_rw1, col_rw2 = st.columns(2)
+
+    with col_rw1:
+        st.markdown("""<div style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 18px;">
+            <h4 style="margin-top:0; color: #3B82F6;">🏃 Run vs. 🚶 Walk Interval Breakdown</h4>
+        """, unsafe_allow_html=True)
+        
+        st.markdown(f"""
+        - 🏃 **Active Run Segment**: **{run_dist_val:.2f} km** @ **{run_pace_str_val} min/km** ({run_dur_val:.1f} min)
+        - 🚶 **Walk Recovery Segment**: **{walk_dist_val:.2f} km** @ **{walk_pace_str_val} min/km** ({walk_dur_val:.1f} min)
+        """)
+
+        # Run / Walk Ratio Chart
+        fig_rw_bar = gg.Figure()
+        fig_rw_bar.add_trace(gg.Bar(y=["Time Breakdown"], x=[run_dur_val], name="Running", orientation="h", marker_color="#10B981"))
+        fig_rw_bar.add_trace(gg.Bar(y=["Time Breakdown"], x=[walk_dur_val], name="Walking", orientation="h", marker_color="#F59E0B"))
+        fig_rw_bar.update_layout(
+            barmode="stack",
+            height=120,
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            margin=dict(l=0, r=0, t=10, b=10),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+        )
+        st.plotly_chart(fig_rw_bar, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with col_rw2:
+        st.markdown("""<div style="background: rgba(30, 41, 59, 0.7); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 18px;">
+            <h4 style="margin-top:0; color: #3B82F6;">🫀 Heart Rate Zone Distribution</h4>
+        """, unsafe_allow_html=True)
+
+        z1 = run_sum.get("hr_z1_secs", 0) / 60.0 if pd.notnull(run_sum.get("hr_z1_secs")) else 0
+        z2 = run_sum.get("hr_z2_secs", 0) / 60.0 if pd.notnull(run_sum.get("hr_z2_secs")) else 0
+        z3 = run_sum.get("hr_z3_secs", 0) / 60.0 if pd.notnull(run_sum.get("hr_z3_secs")) else 0
+        z4 = run_sum.get("hr_z4_secs", 0) / 60.0 if pd.notnull(run_sum.get("hr_z4_secs")) else 0
+        z5 = run_sum.get("hr_z5_secs", 0) / 60.0 if pd.notnull(run_sum.get("hr_z5_secs")) else 0
+
+        tot_z_min = z1 + z2 + z3 + z4 + z5
+        if tot_z_min > 0:
+            z1_pct, z2_pct, z3_pct, z4_pct, z5_pct = (z1/tot_z_min)*100, (z2/tot_z_min)*100, (z3/tot_z_min)*100, (z4/tot_z_min)*100, (z5/tot_z_min)*100
+        else:
+            z1_pct, z2_pct, z3_pct, z4_pct, z5_pct = 0, 0, 0, 0, 0
+
+        fig_hr_zones = gg.Figure()
+        fig_hr_zones.add_trace(gg.Bar(
+            y=["Z1 Warmup", "Z2 Aerobic", "Z3 Tempo", "Z4 Threshold", "Z5 Anaerobic"],
+            x=[z1_pct, z2_pct, z3_pct, z4_pct, z5_pct],
+            orientation="h",
+            marker_color=["#94A3B8", "#10B981", "#F59E0B", "#F97316", "#EF4444"],
+            text=[f"{z1_pct:.1f}% ({z1:.1f}m)", f"{z2_pct:.1f}% ({z2:.1f}m)", f"{z3_pct:.1f}% ({z3:.1f}m)", f"{z4_pct:.1f}% ({z4:.1f}m)", f"{z5_pct:.1f}% ({z5:.1f}m)"],
+            textposition="auto"
+        ))
+
+        fig_hr_zones.update_layout(
+            height=200,
+            template="plotly_dark",
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            margin=dict(l=0, r=0, t=10, b=10),
+            xaxis_title="% Time in Zone"
+        )
+        st.plotly_chart(fig_hr_zones, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
 
     # Shadcn Metric Cards
     col1, col2, col3, col4, col5, col6 = st.columns(6)
@@ -603,7 +727,7 @@ elif selected_tab == "Single Run Deep-Dive":
 # =========================================================
 # 3. 📈 TRAINING TRENDS & WORKLOAD (WITH ONE-LINE INSIGHTS)
 # =========================================================
-elif selected_tab == "Training Trends & Workload":
+elif selected_tab == "📈 Training Trends & Workload":
     st.header("📈 Multi-Metric Training Trends & Workload")
     st.markdown("Longitudinal progression curves with **7-day rolling average trendlines** and dynamic metric insights.")
 
@@ -685,7 +809,7 @@ elif selected_tab == "Training Trends & Workload":
 # =========================================================
 # 4. 😴 RECOVERY & READINESS
 # =========================================================
-elif selected_tab == "Recovery & Readiness":
+elif selected_tab == "😴 Recovery & Readiness":
     st.header("😴 Recovery & Readiness Analytics")
 
     col_r1, col_r2 = st.columns(2)
@@ -719,7 +843,7 @@ elif selected_tab == "Recovery & Readiness":
 # =========================================================
 # 5. 🏆 GOALS & MILESTONES
 # =========================================================
-elif selected_tab == "Goals & Milestones":
+elif selected_tab == "🏆 Goals & Milestones":
     st.header("🏆 5K Goal & Milestone Wall")
 
     valid_paces = summary_df["avg_pace_min_km"].dropna()
