@@ -151,24 +151,50 @@ def parse_runs(activities):
     return pd.DataFrame(summary_list)
 
 
-def extract_native_hr_zones(client, act_id):
-    """Fetch official native HR zones directly from Garmin API."""
+def extract_native_hr_zones(client, act_id, act_tps=None):
+    """Fetch official native HR zones directly from Garmin API, with robust list/dict handling and trackpoint fallback."""
     hr_z_dict = {"hr_z1_secs": 0.0, "hr_z2_secs": 0.0, "hr_z3_secs": 0.0, "hr_z4_secs": 0.0, "hr_z5_secs": 0.0}
     hr_zones_raw = None
     try:
         hr_zones_raw = client.get_activity_hr_in_timezones(act_id)
-        if hr_zones_raw and isinstance(hr_zones_raw, list):
-            for z in hr_zones_raw:
-                z_num = z.get("zoneNumber")
-                if z_num in [1, 2, 3, 4, 5]:
-                    hr_z_dict[f"hr_z{z_num}_secs"] = round(float(z.get("secsInZone", 0.0) or 0.0), 1)
+        if hr_zones_raw:
+            if isinstance(hr_zones_raw, list):
+                for z in hr_zones_raw:
+                    if isinstance(z, dict):
+                        z_num = z.get("zoneNumber") or z.get("zoneIndex")
+                        secs = float(z.get("secsInZone") or z.get("secs") or z.get("duration") or 0.0)
+                        if z_num in [1, 2, 3, 4, 5]:
+                            hr_z_dict[f"hr_z{z_num}_secs"] = round(secs, 1)
+            elif isinstance(hr_zones_raw, dict):
+                for k, v in hr_zones_raw.items():
+                    if "z" in k.lower() or "zone" in k.lower():
+                        for z_num in range(1, 6):
+                            if str(z_num) in k:
+                                secs = float(v.get("secsInZone") or v if isinstance(v, (int, float)) else 0.0)
+                                hr_z_dict[f"hr_z{z_num}_secs"] = round(secs, 1)
     except Exception as e:
         print(f"  Warning: HR zones API failed for {act_id}: {e}")
+
+    # Fallback to trackpoint heart rate values if all HR zones remain 0
+    tot_secs = sum(hr_z_dict.values())
+    if tot_secs == 0 and act_tps:
+        tp_df = pd.DataFrame(act_tps).dropna(subset=["heart_rate_bpm"])
+        if not tp_df.empty:
+            max_hr = tp_df["heart_rate_bpm"].max()
+            if max_hr and max_hr > 100:
+                z1_b, z2_b, z3_b, z4_b = max_hr * 0.60, max_hr * 0.70, max_hr * 0.80, max_hr * 0.90
+                hrs = tp_df["heart_rate_bpm"]
+                hr_z_dict["hr_z1_secs"] = float(len(hrs[hrs < z1_b]) * 2)
+                hr_z_dict["hr_z2_secs"] = float(len(hrs[(hrs >= z1_b) & (hrs < z2_b)]) * 2)
+                hr_z_dict["hr_z3_secs"] = float(len(hrs[(hrs >= z2_b) & (hrs < z3_b)]) * 2)
+                hr_z_dict["hr_z4_secs"] = float(len(hrs[(hrs >= z3_b) & (hrs < z4_b)]) * 2)
+                hr_z_dict["hr_z5_secs"] = float(len(hrs[hrs >= z4_b]) * 2)
+
     return hr_z_dict, hr_zones_raw
 
 
-def extract_native_typed_splits(client, act_id):
-    """Fetch official native Run/Walk/Stand typed splits directly from Garmin API."""
+def extract_native_typed_splits(client, act_id, summary_raw=None, act_tps=None):
+    """Fetch official native Run/Walk/Stand typed splits directly from Garmin API with multi-schema fallback."""
     res = {
         "run_duration_min": 0.0,
         "run_distance_km": 0.0,
@@ -181,6 +207,44 @@ def extract_native_typed_splits(client, act_id):
         "idle_duration_min": 0.0
     }
     typed_splits_raw = None
+
+    # 1. Try splitSummaries in summary_raw
+    if summary_raw and isinstance(summary_raw, dict):
+        split_summaries = summary_raw.get("splitSummaries")
+        if split_summaries and isinstance(split_summaries, list):
+            run_dur_s, run_dist_m = 0.0, 0.0
+            walk_dur_s, walk_dist_m = 0.0, 0.0
+            found_splits = False
+            for s in split_summaries:
+                stype = str(s.get("splitType") or s.get("typeKey") or s.get("type") or "").upper()
+                dur = float(s.get("duration", 0.0) or 0.0)
+                dist = float(s.get("distance", 0.0) or 0.0)
+                if "RUN" in stype:
+                    run_dur_s += dur
+                    run_dist_m += dist
+                    found_splits = True
+                elif "WALK" in stype:
+                    walk_dur_s += dur
+                    walk_dist_m += dist
+                    found_splits = True
+
+            if found_splits and (run_dur_s > 0 or walk_dur_s > 0):
+                res["run_duration_min"] = round(run_dur_s / 60.0, 1)
+                res["run_distance_km"] = round(run_dist_m / 1000.0, 2)
+                if run_dur_s > 0 and run_dist_m > 0:
+                    p_dec = (1000.0 / (run_dist_m / run_dur_s)) / 60.0
+                    res["run_pace_min_km"] = round(p_dec, 2)
+                    res["run_pace_str"] = format_pace(p_dec)
+
+                res["walk_duration_min"] = round(walk_dur_s / 60.0, 1)
+                res["walk_distance_km"] = round(walk_dist_m / 1000.0, 2)
+                if walk_dur_s > 0 and walk_dist_m > 0:
+                    p_dec = (1000.0 / (walk_dist_m / walk_dur_s)) / 60.0
+                    res["walk_pace_min_km"] = round(p_dec, 2)
+                    res["walk_pace_str"] = format_pace(p_dec)
+                return res, typed_splits_raw
+
+    # 2. Try typed_splits endpoint
     try:
         typed_splits_raw = client.get_activity_typed_splits(act_id)
         splits = typed_splits_raw.get("splits", []) if isinstance(typed_splits_raw, dict) else []
@@ -188,39 +252,78 @@ def extract_native_typed_splits(client, act_id):
         run_dur_s, run_dist_m = 0.0, 0.0
         walk_dur_s, walk_dist_m = 0.0, 0.0
         stand_dur_s = 0.0
+        found_splits = False
 
         for s in splits:
-            stype = str(s.get("type", "")).upper()
+            stype = str(s.get("type") or s.get("splitType") or s.get("typeKey") or "").upper()
             dur = float(s.get("duration", 0.0) or 0.0)
             dist = float(s.get("distance", 0.0) or 0.0)
             if "RUN" in stype:
                 run_dur_s += dur
                 run_dist_m += dist
+                found_splits = True
             elif "WALK" in stype:
                 walk_dur_s += dur
                 walk_dist_m += dist
+                found_splits = True
             elif "STAND" in stype or "IDLE" in stype:
                 stand_dur_s += dur
 
-        if run_dur_s > 0 or run_dist_m > 0:
+        if found_splits and (run_dur_s > 0 or walk_dur_s > 0):
             res["run_duration_min"] = round(run_dur_s / 60.0, 1)
             res["run_distance_km"] = round(run_dist_m / 1000.0, 2)
             if run_dur_s > 0 and run_dist_m > 0:
-                run_pace_dec = (1000.0 / (run_dist_m / run_dur_s)) / 60.0
-                res["run_pace_min_km"] = round(run_pace_dec, 2)
-                res["run_pace_str"] = format_pace(run_pace_dec)
+                p_dec = (1000.0 / (run_dist_m / run_dur_s)) / 60.0
+                res["run_pace_min_km"] = round(p_dec, 2)
+                res["run_pace_str"] = format_pace(p_dec)
 
-        if walk_dur_s > 0 or walk_dist_m > 0:
             res["walk_duration_min"] = round(walk_dur_s / 60.0, 1)
             res["walk_distance_km"] = round(walk_dist_m / 1000.0, 2)
             if walk_dur_s > 0 and walk_dist_m > 0:
-                walk_pace_dec = (1000.0 / (walk_dist_m / walk_dur_s)) / 60.0
-                res["walk_pace_min_km"] = round(walk_pace_dec, 2)
-                res["walk_pace_str"] = format_pace(walk_pace_dec)
+                p_dec = (1000.0 / (walk_dist_m / walk_dur_s)) / 60.0
+                res["walk_pace_min_km"] = round(p_dec, 2)
+                res["walk_pace_str"] = format_pace(p_dec)
 
-        res["idle_duration_min"] = round(stand_dur_s / 60.0, 1)
+            res["idle_duration_min"] = round(stand_dur_s / 60.0, 1)
+            return res, typed_splits_raw
     except Exception as e:
         print(f"  Warning: Typed splits API failed for {act_id}: {e}")
+
+    # 3. Fallback to second-by-second trackpoint thresholding (< 7.0 km/h or speed_mps < 1.94 m/s = Walk)
+    if act_tps:
+        tp_df = pd.DataFrame(act_tps)
+        if not tp_df.empty:
+            cad = tp_df.get("cadence_spm", pd.Series(dtype=float)).fillna(0)
+            speed = tp_df.get("speed_mps", pd.Series(dtype=float)).fillna(0)
+
+            walk_mask = (cad > 0) & (cad < 120) | ((speed > 0) & (speed < 1.94))
+            run_mask = (cad >= 120) | (speed >= 1.94)
+
+            tp_run = tp_df[run_mask]
+            tp_walk = tp_df[walk_mask]
+
+            run_sec = len(tp_run) * 2
+            walk_sec = len(tp_walk) * 2
+
+            run_dist_m = tp_run["speed_mps"].sum() * 2
+            walk_dist_m = tp_walk["speed_mps"].sum() * 2
+
+            run_spd_avg = tp_run["speed_mps"].mean() if len(tp_run) > 0 else 0
+            walk_spd_avg = tp_walk["speed_mps"].mean() if len(tp_walk) > 0 else 0
+
+            res["run_duration_min"] = round(run_sec / 60.0, 1)
+            res["run_distance_km"] = round(run_dist_m / 1000.0, 2)
+            if run_spd_avg > 0:
+                p_dec = (1000.0 / run_spd_avg) / 60.0
+                res["run_pace_min_km"] = round(p_dec, 2)
+                res["run_pace_str"] = format_pace(p_dec)
+
+            res["walk_duration_min"] = round(walk_sec / 60.0, 1)
+            res["walk_distance_km"] = round(walk_dist_m / 1000.0, 2)
+            if walk_spd_avg > 0:
+                p_dec = (1000.0 / walk_spd_avg) / 60.0
+                res["walk_pace_min_km"] = round(p_dec, 2)
+                res["walk_pace_str"] = format_pace(p_dec)
 
     return res, typed_splits_raw
 
@@ -237,33 +340,14 @@ def extract_trackpoints_and_details(client, summary_df):
 
         print(f"[{idx+1}/{len(summary_df)}] Ingesting native Garmin API data for activity {act_id} ({act_name} - {start_time})...")
 
-        # 1. Direct Native HR Zone Ingestion
-        hr_z_dict, hr_zones_raw = extract_native_hr_zones(client, act_id)
-
-        # 2. Direct Native Run/Walk Typed Splits Ingestion
-        segment_dict, typed_splits_raw = extract_native_typed_splits(client, act_id)
-
-        # 3. Full Raw Activity JSON payload endpoints
+        # 1. Full Summary Endpoint
         full_summary_raw = None
-        splits_raw = None
-        weather_raw = None
-
         try:
             full_summary_raw = client.get_activity(act_id)
         except Exception:
             pass
 
-        try:
-            splits_raw = client.get_activity_splits(act_id)
-        except Exception:
-            pass
-
-        try:
-            weather_raw = client.get_activity_weather(act_id)
-        except Exception:
-            pass
-
-        # 4. Activity detail trackpoints
+        # 2. Activity Detail Trackpoints
         act_tps = []
         try:
             details_raw = client.get_activity_details(act_id)
@@ -318,6 +402,25 @@ def extract_trackpoints_and_details(client, summary_df):
                     act_tps.append(tp_obj)
         except Exception as e:
             print(f"  Warning: Details extraction failed for {act_id}: {e}")
+
+        # 3. Direct Native HR Zone Ingestion (with trackpoint fallback)
+        hr_z_dict, hr_zones_raw = extract_native_hr_zones(client, act_id, act_tps)
+
+        # 4. Direct Native Run/Walk Typed Splits Ingestion (with multi-schema fallback)
+        segment_dict, typed_splits_raw = extract_native_typed_splits(client, act_id, full_summary_raw, act_tps)
+
+        # 5. Fetch Splits & Weather
+        splits_raw = None
+        weather_raw = None
+        try:
+            splits_raw = client.get_activity_splits(act_id)
+        except Exception:
+            pass
+
+        try:
+            weather_raw = client.get_activity_weather(act_id)
+        except Exception:
+            pass
 
         # Save Official Raw Activity JSON payload to data/raw_activity_{act_id}.json
         try:
