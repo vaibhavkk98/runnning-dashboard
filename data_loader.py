@@ -99,9 +99,10 @@ def parse_runs(activities):
         distance_km = round(distance_m / 1000.0, 3)
         duration_min = round(duration_s / 60.0, 2)
 
-        # Average pace in min/km
+        # Average pace in min/km and seconds/km
         if avg_speed_mps > 0:
             avg_pace_dec = (1000.0 / avg_speed_mps) / 60.0
+            avg_pace_sec = round(avg_pace_dec * 60.0, 1)
             pace_mins = int(avg_pace_dec)
             pace_secs = int(round((avg_pace_dec - pace_mins) * 60))
             if pace_secs == 60:
@@ -110,6 +111,7 @@ def parse_runs(activities):
             avg_pace_str = f"{pace_mins}:{pace_secs:02d}"
         else:
             avg_pace_dec = None
+            avg_pace_sec = None
             avg_pace_str = "N/A"
 
         # Stride length in cm: if Garmin returns null/0, derive dynamically: Speed (m/s) / (Cadence spm / 60) * 100
@@ -127,6 +129,7 @@ def parse_runs(activities):
             "duration_min": duration_min,
             "elapsed_duration_min": round((act.get("elapsedDuration", 0) or 0) / 60.0, 2),
             "avg_pace_min_km": round(avg_pace_dec, 2) if avg_pace_dec else None,
+            "avg_pace_sec": avg_pace_sec,
             "avg_pace_str": avg_pace_str,
             "avg_heart_rate": act.get("averageHR"),
             "max_heart_rate": act.get("maxHR"),
