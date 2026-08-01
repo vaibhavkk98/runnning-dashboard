@@ -1,0 +1,17 @@
+# Environment & Credentials
+.env
+
+# Virtual Environment
+venv/
+
+# Local Data Files
+data/
+
+# Session Caches & Tokens
+.garminconnect/
+*.json
+
+# Python & OS Artifacts
+__pycache__/
+*.pyc
+.DS_Store
