@@ -1,11 +1,11 @@
 import os
-import subprocess
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as gg
 from plotly.subplots import make_subplots
 import streamlit as st
+from data_loader import fetch_garmin_data
 
 # ---------------------------------------------------------
 # Page Configuration & Design Tokens
@@ -79,12 +79,21 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# Data Loading & Refresh Logic
+# Data Loading & Auto-Fetch Logic
 # ---------------------------------------------------------
 @st.cache_data(ttl=300)
 def load_data():
     summary_file = "data/runs_summary.csv"
     trackpoints_file = "data/raw_trackpoints.csv"
+
+    # Automatically fetch data if CSVs do not exist (e.g. initial Streamlit Cloud deployment)
+    if not os.path.exists(summary_file) or not os.path.exists(trackpoints_file):
+        with st.spinner("Fetching initial Garmin running data..."):
+            try:
+                fetch_garmin_data()
+            except Exception as e:
+                st.error(f"Failed to fetch initial Garmin data: {e}")
+                return None, None
 
     if not os.path.exists(summary_file) or not os.path.exists(trackpoints_file):
         return None, None
@@ -97,7 +106,7 @@ def load_data():
     trackpoints_df["timestamp"] = pd.to_datetime(trackpoints_df["timestamp"])
     trackpoints_df["start_time"] = pd.to_datetime(trackpoints_df["start_time"])
 
-    # Ensure activity_id is string/int consistent
+    # Ensure activity_id is consistent
     summary_df["activity_id"] = summary_df["activity_id"].astype(str)
     trackpoints_df["activity_id"] = trackpoints_df["activity_id"].astype(str)
 
@@ -115,21 +124,24 @@ st.sidebar.markdown("---")
 
 if st.sidebar.button("🔄 Refresh Garmin Data", use_container_width=True):
     with st.spinner("Connecting to Garmin Connect & fetching latest runs..."):
-        result = subprocess.run(["./venv/bin/python", "data_loader.py"], capture_output=True, text=True)
-        if result.returncode == 0:
-            st.sidebar.success("Data refreshed successfully!")
-            st.cache_data.clear()
-            st.rerun()
-        else:
-            st.sidebar.error(f"Refresh failed: {result.stderr}")
+        try:
+            success = fetch_garmin_data()
+            if success:
+                st.sidebar.success("Data refreshed successfully!")
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.sidebar.error("No running activities found.")
+        except Exception as e:
+            st.sidebar.error(f"Refresh failed: {e}")
 
 summary_df, trackpoints_df = load_data()
 
 if summary_df is None or trackpoints_df is None:
-    st.error("Data files missing. Please run `data_loader.py` to extract Garmin running data.")
+    st.error("Data files missing or failed to fetch. Please verify credentials in Streamlit Secrets / `.env` file.")
     st.stop()
 
-# Filter for runs only
+# Sort activities newest first
 summary_df = summary_df.sort_values(by="start_time", ascending=False).reset_index(drop=True)
 
 # ---------------------------------------------------------
@@ -166,7 +178,7 @@ with tab1:
 
     if not run_tp.empty:
         run_tp["distance_km"] = run_tp["distance_m"] / 1000.0
-        # Filter out extreme pace outliers for clear visual analysis (pace between 3:00 and 14:00 min/km)
+        # Filter out extreme pace outliers for clear visual analysis
         run_tp["clean_pace"] = run_tp["pace_min_km"].apply(lambda p: p if 3.0 <= p <= 14.0 else None)
     
     # KPI Row
@@ -357,8 +369,6 @@ with tab2:
 
     with col_w2:
         # Acute-to-Chronic Workload Ratio (ACWR) Calculation
-        # Acute: Last 7 days total distance
-        # Chronic: Average weekly distance over last 28 days
         max_date = summary_df["start_time"].max()
         last_7_days = summary_df[summary_df["start_time"] >= (max_date - pd.Timedelta(days=7))]
         last_28_days = summary_df[summary_df["start_time"] >= (max_date - pd.Timedelta(days=28))]

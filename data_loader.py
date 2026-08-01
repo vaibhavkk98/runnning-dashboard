@@ -11,37 +11,70 @@ from garminconnect import (
     GarminConnectTooManyRequestsError,
 )
 
-# Load environment variables
+# Load environment variables from .env if present
 load_dotenv()
 
-GARMIN_EMAIL = os.getenv("GARMIN_EMAIL")
-GARMIN_PASSWORD = os.getenv("GARMIN_PASSWORD")
-TOKEN_STORE = os.path.expanduser("~/.garminconnect")
 DATA_DIR = Path("data")
+
+
+def get_credentials():
+    """Retrieve credentials from Streamlit Secrets or fallback to environment variables."""
+    email = None
+    password = None
+
+    # 1. Try Streamlit secrets (Streamlit Cloud deployment)
+    try:
+        import streamlit as st
+        if hasattr(st, "secrets"):
+            email = st.secrets.get("GARMIN_EMAIL")
+            password = st.secrets.get("GARMIN_PASSWORD")
+    except Exception:
+        pass
+
+    # 2. Fallback to environment variables / .env
+    if not email or not password:
+        email = os.getenv("GARMIN_EMAIL")
+        password = os.getenv("GARMIN_PASSWORD")
+
+    return email, password
+
+
+def get_token_store():
+    """Retrieve a writable directory path for Garmin session tokens."""
+    token_path = os.path.expanduser("~/.garminconnect")
+    try:
+        os.makedirs(token_path, exist_ok=True)
+        return token_path
+    except Exception:
+        fallback_path = "/tmp/.garminconnect"
+        os.makedirs(fallback_path, exist_ok=True)
+        return fallback_path
 
 
 def get_garmin_client() -> Garmin:
     """Log into Garmin Connect with session token caching."""
-    if not GARMIN_EMAIL or not GARMIN_PASSWORD or GARMIN_EMAIL == "your_email@example.com":
-        raise ValueError("GARMIN_EMAIL and GARMIN_PASSWORD must be configured in .env file.")
+    email, password = get_credentials()
 
-    print(f"Connecting to Garmin Connect for user: {GARMIN_EMAIL}...")
-    client = Garmin(GARMIN_EMAIL, GARMIN_PASSWORD)
+    if not email or not password or email == "your_email@example.com":
+        raise ValueError("GARMIN_EMAIL and GARMIN_PASSWORD must be configured in Streamlit Secrets or .env file.")
+
+    print(f"Connecting to Garmin Connect for user: {email}...")
+    client = Garmin(email, password)
+    token_store = get_token_store()
 
     try:
-        # Attempts to load cached tokens first to avoid rate limiting
-        client.login(tokenstore=TOKEN_STORE)
+        client.login(tokenstore=token_store)
         print("Successfully logged into Garmin Connect!")
         return client
     except GarminConnectTooManyRequestsError:
         print("Rate limit reached (429). Please wait a few minutes before trying again.")
-        sys.exit(1)
+        raise
     except GarminConnectAuthenticationError as e:
         print(f"Authentication error: {e}")
-        sys.exit(1)
+        raise
     except GarminConnectConnectionError as e:
         print(f"Connection error: {e}")
-        sys.exit(1)
+        raise
 
 
 def parse_runs(activities):
@@ -174,7 +207,8 @@ def extract_trackpoints(client, summary_df):
     return pd.DataFrame(all_trackpoints)
 
 
-def main():
+def fetch_garmin_data():
+    """Main execution function to fetch and save Garmin runs and trackpoints."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
     client = get_garmin_client()
@@ -188,7 +222,7 @@ def main():
 
     if summary_df.empty:
         print("No running activities found.")
-        return
+        return False
 
     runs_summary_path = DATA_DIR / "runs_summary.csv"
     summary_df.to_csv(runs_summary_path, index=False)
@@ -204,7 +238,8 @@ def main():
     print("\nExtraction Summary:")
     print(f"Total Runs Parsed: {len(summary_df)}")
     print(f"Total Trackpoints Saved: {len(trackpoints_df)}")
+    return True
 
 
 if __name__ == "__main__":
-    main()
+    fetch_garmin_data()
