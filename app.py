@@ -6,6 +6,8 @@ import plotly.graph_objects as gg
 from plotly.subplots import make_subplots
 import streamlit as st
 from datetime import datetime, timedelta
+from streamlit_option_menu import option_menu
+import streamlit_shadcn_ui as ui
 from data_loader import fetch_garmin_data
 
 # Load Dotenv if available locally
@@ -25,19 +27,19 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for Dark Glassmorphism Theme
+# Custom CSS for Sleek High-End Dark Theme (#0F172A / #1E293B)
 st.markdown("""
 <style>
     .stApp {
-        background-color: #0B0E14;
-        color: #E2E8F0;
+        background-color: #0F172A;
+        color: #F8FAFC;
         font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     }
     
     /* Executive Summary Container */
     .insights-card {
-        background: linear-gradient(135deg, rgba(30, 41, 59, 0.7) 0%, rgba(15, 23, 42, 0.8) 100%);
-        border: 1px solid rgba(56, 189, 248, 0.25);
+        background: linear-gradient(135deg, rgba(30, 41, 59, 0.8) 0%, rgba(15, 23, 42, 0.9) 100%);
+        border: 1px solid rgba(59, 130, 246, 0.3);
         border-radius: 16px;
         padding: 24px;
         margin-bottom: 24px;
@@ -48,7 +50,7 @@ st.markdown("""
     .insights-header {
         font-size: 1.25rem;
         font-weight: 700;
-        color: #38BDF8;
+        color: #3B82F6;
         display: flex;
         align-items: center;
         gap: 8px;
@@ -84,32 +86,13 @@ st.markdown("""
         border: 1px solid rgba(239, 68, 68, 0.4);
     }
 
-    /* Metric Cards */
+    /* Metric Containers */
     div[data-testid="stMetric"] {
-        background: rgba(23, 32, 48, 0.6);
+        background: rgba(30, 41, 59, 0.7);
         border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: 12px;
         padding: 14px 18px;
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-    }
-    
-    /* Top Tabs Styling */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 16px;
-        border-bottom: 1px solid #1E293B;
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        height: 52px;
-        border-radius: 8px 8px 0px 0px;
-        color: #94A3B8;
-        font-weight: 600;
-        font-size: 1.05rem;
-    }
-    
-    .stTabs [aria-selected="true"] {
-        color: #38BDF8 !important;
-        border-bottom: 3px solid #38BDF8 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -200,27 +183,32 @@ def format_delta(curr, prev, fmt="{:.2f}", unit="", inverse=False):
     return f"{prefix}{fmt.format(diff)} {unit}".strip()
 
 # ---------------------------------------------------------
-# Main Application Layout & Top Navigation Tabs
+# Top Navigation Bar (Option Menu with Glowing Active Tabs)
 # ---------------------------------------------------------
-st.title("🏃 5K Running Performance & Training Dashboard")
-st.markdown("Real-time telemetry & biometrics from **Garmin Forerunner 165**")
+st.title("🏃 5K Running Performance Dashboard")
 
-tab_home, tab_single_run, tab_trends, tab_recovery, tab_goals = st.tabs([
-    "🏠 Home Overview",
-    "🏃 Single Run Deep-Dive",
-    "📈 Training Trends & Workload",
-    "😴 Recovery & Readiness",
-    "🏆 Goals & Milestones"
-])
+selected_tab = option_menu(
+    menu_title=None,
+    options=["Home Overview", "Single Run Deep-Dive", "Training Trends & Workload", "Recovery & Readiness", "Goals & Milestones"],
+    icons=["house-fill", "activity", "line-chart", "moon-stars-fill", "trophy-fill"],
+    default_index=0,
+    orientation="horizontal",
+    styles={
+        "container": {"padding": "4px!important", "background-color": "#0F172A", "border-radius": "12px", "border": "1px solid rgba(255,255,255,0.08)", "margin-bottom": "20px"},
+        "icon": {"color": "#3B82F6", "font-size": "16px"},
+        "nav-link": {"font-size": "14px", "text-align": "center", "margin": "0px", "--hover-color": "#1E293B", "color": "#94A3B8", "font-weight": "500"},
+        "nav-link-selected": {"background-color": "#3B82F6", "color": "#FFFFFF", "font-weight": "600", "border-radius": "8px"},
+    }
+)
 
 # =========================================================
 # 1. 🏠 HOME OVERVIEW (EMBEDDED GEMINI AI CHAT)
 # =========================================================
-with tab_home:
+if selected_tab == "Home Overview":
     st.header("🏠 Executive Overview & AI Coach")
     st.markdown("High-level performance summary & training status for **5K Goal (7:00 min/km)**")
 
-    # Metrics Row
+    # Metrics Row using Shadcn Metric Cards
     latest_run = summary_df.iloc[0]
     
     thirty_days_ago = summary_df["start_time"].max() - timedelta(days=30)
@@ -237,30 +225,33 @@ with tab_home:
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.metric(
-            "Last Run",
-            f"{latest_run['distance_km']:.2f} km",
-            delta=f"{latest_run['start_time'].strftime('%b %d')} ({latest_run['avg_pace_str']}/km)"
+        ui.metric_card(
+            label="Last Run",
+            value=f"{latest_run['distance_km']:.2f} km",
+            description=f"{latest_run['start_time'].strftime('%b %d')} ({latest_run['avg_pace_str']}/km)",
+            key="home_mc_1"
         )
     with c2:
-        st.metric(
-            "30-Day Volume",
-            f"{monthly_vol_km:.1f} km",
-            delta=f"{len(monthly_runs)} completed runs"
+        ui.metric_card(
+            label="30-Day Volume",
+            value=f"{monthly_vol_km:.1f} km",
+            description=f"{len(monthly_runs)} completed runs",
+            key="home_mc_2"
         )
     with c3:
-        st.metric(
-            "Best Pace Achieved",
-            f"{best_pace_row['avg_pace_str']} /km",
-            delta=f"On {pd.to_datetime(best_pace_row['start_time']).strftime('%b %d')}"
+        ui.metric_card(
+            label="Best Pace Achieved",
+            value=f"{best_pace_row['avg_pace_str']} /km",
+            description=f"On {pd.to_datetime(best_pace_row['start_time']).strftime('%b %d')}",
+            key="home_mc_3"
         )
     with c4:
-        gap_str = f"{pace_gap_sec}s/km to target" if pace_gap_sec > 0 else "Target Met!"
-        st.metric(
-            "Target Pace Gap",
-            gap_str,
-            delta="7:00 min/km benchmark",
-            delta_color="inverse"
+        gap_str = f"{pace_gap_sec}s/km gap" if pace_gap_sec > 0 else "Target Met!"
+        ui.metric_card(
+            label="Target Pace Gap",
+            value=gap_str,
+            description="7:00 min/km benchmark",
+            key="home_mc_4"
         )
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -291,7 +282,6 @@ with tab_home:
     st.subheader("💬 Gemini AI Running Coach")
     st.caption("Ask questions about your Garmin telemetry, 5K training plan, pacing, or recovery tips.")
 
-    # Retrieve API key
     gemini_key = None
     try:
         if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
@@ -305,7 +295,6 @@ with tab_home:
     if not gemini_key:
         st.warning("⚠️ `GEMINI_API_KEY` is missing. Please add `GEMINI_API_KEY` to `.env` or Streamlit Secrets.")
     else:
-        # Build dynamic context from telemetry
         recent_runs = summary_df.head(15)
         total_runs = len(summary_df)
         avg_pace_overall = recent_runs["avg_pace_min_km"].mean()
@@ -327,7 +316,6 @@ RECENT 10 RUNS LOG:
 You are an expert AI Running Coach and Exercise Physiologist. Provide specific, data-backed coaching advice based on the runner's telemetry above. Be encouraging, precise, and practical.
 """
 
-        # Chat session state
         if "messages" not in st.session_state:
             st.session_state.messages = [
                 {
@@ -336,12 +324,10 @@ You are an expert AI Running Coach and Exercise Physiologist. Provide specific, 
                 }
             ]
 
-        # Render Chat History
         for msg in st.session_state.messages:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
-        # Chat Input
         if user_prompt := st.chat_input("Ask your Gemini AI Coach (e.g., 'How do I close the gap to 7:00 pace?')..."):
             st.session_state.messages.append({"role": "user", "content": user_prompt})
             with st.chat_message("user"):
@@ -382,7 +368,7 @@ You are an expert AI Running Coach and Exercise Physiologist. Provide specific, 
 # =========================================================
 # 2. 🏃 SINGLE RUN DEEP-DIVE
 # =========================================================
-with tab_single_run:
+elif selected_tab == "Single Run Deep-Dive":
     st.header("🏃 Activity Telemetry & Biometrics")
 
     run_options = {
@@ -478,22 +464,22 @@ with tab_single_run:
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # KPI Metrics
+    # Shadcn Metric Cards
     col1, col2, col3, col4, col5, col6 = st.columns(6)
     with col1:
-        st.metric("Distance", f"{run_sum['distance_km']:.2f} km", delta=format_delta(run_sum['distance_km'], prev_run['distance_km'] if prev_run is not None else None, "{:.2f}", "km"))
+        ui.metric_card("Distance", f"{run_sum['distance_km']:.2f} km", delta=format_delta(run_sum['distance_km'], prev_run['distance_km'] if prev_run is not None else None, "{:.2f}", "km"), key="sr_mc_1")
     with col2:
-        st.metric("Duration", f"{run_sum['duration_min']:.1f} min", delta=format_delta(run_sum['duration_min'], prev_run['duration_min'] if prev_run is not None else None, "{:.1f}", "min"))
+        ui.metric_card("Duration", f"{run_sum['duration_min']:.1f} min", delta=format_delta(run_sum['duration_min'], prev_run['duration_min'] if prev_run is not None else None, "{:.1f}", "min"), key="sr_mc_2")
     with col3:
-        st.metric("Avg Pace", f"{run_sum['avg_pace_str']} /km", delta=format_delta(run_sum['avg_pace_min_km'], prev_run['avg_pace_min_km'] if prev_run is not None else None, "{:.2f}", "m/km"), delta_color="inverse")
+        ui.metric_card("Avg Pace", f"{run_sum['avg_pace_str']} /km", delta=format_delta(run_sum['avg_pace_min_km'], prev_run['avg_pace_min_km'] if prev_run is not None else None, "{:.2f}", "m/km"), key="sr_mc_3")
     with col4:
-        st.metric("Avg Heart Rate", f"{int(run_sum['avg_heart_rate'])} bpm" if pd.notnull(run_sum['avg_heart_rate']) else "N/A", delta=format_delta(run_sum['avg_heart_rate'], prev_run['avg_heart_rate'] if prev_run is not None else None, "{:.0f}", "bpm"), delta_color="inverse")
+        ui.metric_card("Avg HR", f"{int(run_sum['avg_heart_rate'])} bpm" if pd.notnull(run_sum['avg_heart_rate']) else "N/A", delta=format_delta(run_sum['avg_heart_rate'], prev_run['avg_heart_rate'] if prev_run is not None else None, "{:.0f}", "bpm"), key="sr_mc_4")
     with col5:
-        st.metric("Avg Cadence", f"{int(run_sum['avg_cadence_spm'])} spm" if pd.notnull(run_sum['avg_cadence_spm']) else "N/A", delta=format_delta(run_sum['avg_cadence_spm'], prev_run['avg_cadence_spm'] if prev_run is not None else None, "{:.0f}", "spm"))
+        ui.metric_card("Avg Cadence", f"{int(run_sum['avg_cadence_spm'])} spm" if pd.notnull(run_sum['avg_cadence_spm']) else "N/A", delta=format_delta(run_sum['avg_cadence_spm'], prev_run['avg_cadence_spm'] if prev_run is not None else None, "{:.0f}", "spm"), key="sr_mc_5")
     with col6:
         stride_m_val = (run_sum['stride_length_cm'] / 100.0) if pd.notnull(run_sum['stride_length_cm']) and run_sum['stride_length_cm'] > 0 else 0.0
         prev_stride_m = (prev_run['stride_length_cm'] / 100.0) if prev_run is not None and pd.notnull(prev_run.get('stride_length_cm')) else None
-        st.metric("Stride Length", f"{stride_m_val:.2f} m", delta=format_delta(stride_m_val, prev_stride_m, "{:.2f}", "m"))
+        ui.metric_card("Stride Length", f"{stride_m_val:.2f} m", delta=format_delta(stride_m_val, prev_stride_m, "{:.2f}", "m"), key="sr_mc_6")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -502,33 +488,33 @@ with tab_single_run:
             run_tp, x="distance_km", y="clean_pace",
             title="⚡ Instantaneous Pace Profile (Target: 7:00 min/km)",
             labels={"distance_km": "Distance (km)", "clean_pace": "Pace (min/km)"},
-            color_discrete_sequence=["#38BDF8"]
+            color_discrete_sequence=["#3B82F6"]
         )
         fig_pace.add_hrect(y0=6.75, y1=7.25, fillcolor="rgba(16, 185, 129, 0.15)", line_width=0, annotation_text="🎯 Target Zone", annotation_position="top left", annotation_font_color="#10B981")
         fig_pace.add_hline(y=7.0, line_dash="dash", line_color="#EF4444", annotation_text="7:00 Benchmark")
-        fig_pace.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(23, 32, 48, 0.5)", yaxis=dict(autorange="reversed"))
+        fig_pace.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", yaxis=dict(autorange="reversed"))
         st.plotly_chart(fig_pace, use_container_width=True)
 
         col_left, col_right = st.columns(2)
         with col_left:
             fig_hr_ele = make_subplots(specs=[[{"secondary_y": True}]])
-            fig_hr_ele.add_trace(gg.Scatter(x=run_tp["distance_km"], y=run_tp["elevation_m"], name="Elevation (m)", fill="tozeroy", fillcolor="rgba(100, 116, 139, 0.2)", line=dict(color="#94A3B8", width=1.5)), secondary_y=False)
+            fig_hr_ele.add_trace(gg.Scatter(x=run_tp["distance_km"], y=run_tp["elevation_m"], name="Elevation (m)", fill="tozeroy", fillcolor="rgba(148, 163, 184, 0.15)", line=dict(color="#94A3B8", width=1.5)), secondary_y=False)
             fig_hr_ele.add_trace(gg.Scatter(x=run_tp["distance_km"], y=run_tp["heart_rate_bpm"], name="Heart Rate (bpm)", line=dict(color="#F43F5E", width=2)), secondary_y=True)
-            fig_hr_ele.update_layout(title="❤️ Heart Rate & Elevation Profile", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(23, 32, 48, 0.5)")
+            fig_hr_ele.update_layout(title="❤️ Heart Rate & Elevation Profile", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
             st.plotly_chart(fig_hr_ele, use_container_width=True)
 
         with col_right:
             fig_bio = make_subplots(specs=[[{"secondary_y": True}]])
             fig_bio.add_trace(gg.Scatter(x=run_tp["distance_km"], y=run_tp["cadence_spm"], name="Cadence (spm)", line=dict(color="#10B981", width=2)), secondary_y=False)
             fig_bio.add_trace(gg.Scatter(x=run_tp["distance_km"], y=run_tp["stride_length_m"], name="Stride Length (m)", line=dict(color="#F59E0B", width=2)), secondary_y=True)
-            fig_bio.update_layout(title="⚙️ Biomechanics (Cadence & Stride)", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(23, 32, 48, 0.5)")
+            fig_bio.update_layout(title="⚙️ Biomechanics (Cadence & Stride)", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
             st.plotly_chart(fig_bio, use_container_width=True)
 
 
 # =========================================================
 # 3. 📈 TRAINING TRENDS & WORKLOAD (WITH ONE-LINE INSIGHTS)
 # =========================================================
-with tab_trends:
+elif selected_tab == "Training Trends & Workload":
     st.header("📈 Multi-Metric Training Trends & Workload")
     st.markdown("Longitudinal progression curves with **7-day rolling average trendlines** and dynamic metric insights.")
 
@@ -553,23 +539,23 @@ with tab_trends:
 
     pace_diff_sec = int(round((curr_roll_pace - 7.00) * 60))
 
-    # Grid Layout with One-Line Insights
+    # Grid Layout with One-Line Insights & Seamless Transparent Backgrounds
     row1_c1, row1_c2 = st.columns(2)
     with row1_c1:
         st.info(f"📏 **Distance Insight:** 7-day rolling average distance is **{curr_roll_dist:.2f} km/run** across {len(df_chrono)} logged activities.")
         fig1 = gg.Figure()
-        fig1.add_trace(gg.Bar(x=df_chrono["start_time"], y=df_chrono["distance_km"], name="Distance (km)", marker_color="#38BDF8"))
+        fig1.add_trace(gg.Bar(x=df_chrono["start_time"], y=df_chrono["distance_km"], name="Distance (km)", marker_color="#3B82F6"))
         fig1.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["roll_dist"], name="7-Day Rolling Avg", line=dict(color="#F59E0B", width=2.5)))
-        fig1.update_layout(title="📏 Activity Distance (km)", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(23, 32, 48, 0.5)")
+        fig1.update_layout(title="📏 Activity Distance (km)", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig1, use_container_width=True)
 
     with row1_c2:
         st.info(f"⚡ **Pace Insight:** 7-day rolling average pace is **{curr_roll_pace:.2f} min/km** ({pace_diff_sec}s/km gap to 7:00 target).")
         fig2 = gg.Figure()
-        fig2.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["avg_pace_min_km"], mode="markers+lines", name="Pace (min/km)", line=dict(color="#38BDF8", width=1.5)))
+        fig2.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["avg_pace_min_km"], mode="markers+lines", name="Pace (min/km)", line=dict(color="#3B82F6", width=1.5)))
         fig2.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["roll_pace"], name="7-Day Rolling Avg", line=dict(color="#10B981", width=2.5)))
         fig2.add_hline(y=7.0, line_dash="dash", line_color="#EF4444", annotation_text="7:00 Target")
-        fig2.update_layout(title="⚡ Average Pace (min/km)", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(23, 32, 48, 0.5)", yaxis=dict(autorange="reversed"))
+        fig2.update_layout(title="⚡ Average Pace (min/km)", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", yaxis=dict(autorange="reversed"))
         st.plotly_chart(fig2, use_container_width=True)
 
     row2_c1, row2_c2 = st.columns(2)
@@ -577,8 +563,8 @@ with tab_trends:
         st.info(f"❤️ **Heart Rate Insight:** Rolling average HR is **{curr_roll_hr:.0f} bpm**, demonstrating stable cardiovascular response.")
         fig3 = gg.Figure()
         fig3.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["avg_heart_rate"], mode="markers+lines", name="Avg HR (bpm)", line=dict(color="#F43F5E", width=1.5)))
-        fig3.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["roll_hr"], name="7-Day Rolling Avg", line=dict(color="#38BDF8", width=2.5)))
-        fig3.update_layout(title="❤️ Average Heart Rate (bpm)", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(23, 32, 48, 0.5)")
+        fig3.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["roll_hr"], name="7-Day Rolling Avg", line=dict(color="#3B82F6", width=2.5)))
+        fig3.update_layout(title="❤️ Average Heart Rate (bpm)", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig3, use_container_width=True)
 
     with row2_c2:
@@ -586,7 +572,7 @@ with tab_trends:
         fig4 = gg.Figure()
         fig4.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["avg_cadence_spm"], mode="markers+lines", name="Cadence (spm)", line=dict(color="#10B981", width=1.5)))
         fig4.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["roll_cad"], name="7-Day Rolling Avg", line=dict(color="#F59E0B", width=2.5)))
-        fig4.update_layout(title="⚙️ Cadence (spm)", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(23, 32, 48, 0.5)")
+        fig4.update_layout(title="⚙️ Cadence (spm)", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig4, use_container_width=True)
 
     row3_c1, row3_c2 = st.columns(2)
@@ -595,22 +581,22 @@ with tab_trends:
         fig5 = gg.Figure()
         fig5.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["stride_m"], mode="markers+lines", name="Stride Length (m)", line=dict(color="#F59E0B", width=1.5)))
         fig5.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["roll_stride"], name="7-Day Rolling Avg", line=dict(color="#10B981", width=2.5)))
-        fig5.update_layout(title="👟 Stride Length (m)", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(23, 32, 48, 0.5)")
+        fig5.update_layout(title="👟 Stride Length (m)", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig5, use_container_width=True)
 
     with row3_c2:
         st.info(f"🔥 **Calorie Insight:** Rolling average energy expenditure is **{curr_roll_cal:.0f} kcal** per session.")
         fig6 = gg.Figure()
         fig6.add_trace(gg.Bar(x=df_chrono["start_time"], y=df_chrono["calories"], name="Calories (kcal)", marker_color="#8B5CF6"))
-        fig6.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["roll_cal"], name="7-Day Rolling Avg", line=dict(color="#38BDF8", width=2.5)))
-        fig6.update_layout(title="🔥 Calories Burned (kcal)", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(23, 32, 48, 0.5)")
+        fig6.add_trace(gg.Scatter(x=df_chrono["start_time"], y=df_chrono["roll_cal"], name="7-Day Rolling Avg", line=dict(color="#3B82F6", width=2.5)))
+        fig6.update_layout(title="🔥 Calories Burned (kcal)", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig6, use_container_width=True)
 
 
 # =========================================================
 # 4. 😴 RECOVERY & READINESS
 # =========================================================
-with tab_recovery:
+elif selected_tab == "Recovery & Readiness":
     st.header("😴 Recovery & Readiness Analytics")
 
     col_r1, col_r2 = st.columns(2)
@@ -628,7 +614,7 @@ with tab_recovery:
             labels={"avg_pace_min_km": "Avg Pace (min/km)", "avg_heart_rate": "Avg Heart Rate (bpm)"},
             color_continuous_scale="Viridis"
         )
-        fig_scatter.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(23, 32, 48, 0.5)")
+        fig_scatter.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig_scatter, use_container_width=True)
 
     with col_r2:
@@ -637,14 +623,14 @@ with tab_recovery:
             vo2_clean = summary_df.dropna(subset=["vo2_max"])
             fig_vo2.add_trace(gg.Scatter(x=vo2_clean["start_time"], y=vo2_clean["vo2_max"], mode="lines+markers", name="VO2 Max", line=dict(color="#10B981", width=3), marker=dict(size=8)))
         fig_vo2.add_trace(gg.Scatter(x=summary_df["start_time"], y=summary_df["max_heart_rate"], mode="lines+markers", name="Peak HR (bpm)", line=dict(color="#EF4444", width=2, dash="dot"), marker=dict(size=6)))
-        fig_vo2.update_layout(title="📈 Aerobic Capacity & Peak HR Trend", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(23, 32, 48, 0.5)")
+        fig_vo2.update_layout(title="📈 Aerobic Capacity & Peak HR Trend", template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig_vo2, use_container_width=True)
 
 
 # =========================================================
 # 5. 🏆 GOALS & MILESTONES
 # =========================================================
-with tab_goals:
+elif selected_tab == "Goals & Milestones":
     st.header("🏆 5K Goal & Milestone Wall")
 
     valid_paces = summary_df["avg_pace_min_km"].dropna()
@@ -657,12 +643,12 @@ with tab_goals:
             mode="gauge+number+delta",
             value=best_pace,
             domain={'x': [0, 1], 'y': [0, 1]},
-            title={'text': "Current Best Pace vs 7:00 Target (min/km)", 'font': {'size': 16, 'color': '#E2E8F0'}},
+            title={'text': "Current Best Pace vs 7:00 Target (min/km)", 'font': {'size': 16, 'color': '#F8FAFC'}},
             delta={'reference': target_pace, 'increasing': {'color': "#EF4444"}, 'decreasing': {'color': "#10B981"}, 'valueformat': '.2f'},
-            number={'font': {'color': '#38BDF8', 'size': 36}, 'valueformat': '.2f'},
+            number={'font': {'color': '#3B82F6', 'size': 36}, 'valueformat': '.2f'},
             gauge={
                 'axis': {'range': [10.0, 5.0], 'tickwidth': 1, 'tickcolor': "#94A3B8"},
-                'bar': {'color': "#38BDF8"},
+                'bar': {'color': "#3B82F6"},
                 'bgcolor': "rgba(0,0,0,0)",
                 'steps': [
                     {'range': [10.0, 7.0], 'color': 'rgba(239, 68, 68, 0.2)'},
