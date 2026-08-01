@@ -151,52 +151,82 @@ def parse_runs(activities):
     return pd.DataFrame(summary_list)
 
 
-def process_run_walk_segmentation(tp_df):
-    """Segment trackpoints into Running (>=120 spm), Walking (30-119 spm), and Idle (<30 spm)."""
-    if tp_df.empty:
-        return {}
+def extract_native_hr_zones(client, act_id):
+    """Fetch official native HR zones directly from Garmin API."""
+    hr_z_dict = {"hr_z1_secs": 0.0, "hr_z2_secs": 0.0, "hr_z3_secs": 0.0, "hr_z4_secs": 0.0, "hr_z5_secs": 0.0}
+    hr_zones_raw = None
+    try:
+        hr_zones_raw = client.get_activity_hr_in_timezones(act_id)
+        if hr_zones_raw and isinstance(hr_zones_raw, list):
+            for z in hr_zones_raw:
+                z_num = z.get("zoneNumber")
+                if z_num in [1, 2, 3, 4, 5]:
+                    hr_z_dict[f"hr_z{z_num}_secs"] = round(float(z.get("secsInZone", 0.0) or 0.0), 1)
+    except Exception as e:
+        print(f"  Warning: HR zones API failed for {act_id}: {e}")
+    return hr_z_dict, hr_zones_raw
 
-    tp_df = tp_df.copy()
-    tp_df["cadence_spm"] = tp_df["cadence_spm"].fillna(0)
-    tp_df["speed_mps"] = tp_df["speed_mps"].fillna(0)
 
-    run_mask = tp_df["cadence_spm"] >= 120
-    walk_mask = (tp_df["cadence_spm"] >= 30) & (tp_df["cadence_spm"] < 120)
-    idle_mask = tp_df["cadence_spm"] < 30
-
-    tp_run = tp_df[run_mask]
-    tp_walk = tp_df[walk_mask]
-    tp_idle = tp_df[idle_mask]
-
-    # Assume sampling interval ~2s
-    run_sec = len(tp_run) * 2
-    walk_sec = len(tp_walk) * 2
-    idle_sec = len(tp_idle) * 2
-
-    run_dist_m = tp_run["speed_mps"].sum() * 2
-    walk_dist_m = tp_walk["speed_mps"].sum() * 2
-
-    run_speed_avg = tp_run["speed_mps"].mean() if len(tp_run) > 0 else 0
-    walk_speed_avg = tp_walk["speed_mps"].mean() if len(tp_walk) > 0 else 0
-
-    run_pace_dec = (1000.0 / run_speed_avg) / 60.0 if run_speed_avg > 0 else None
-    walk_pace_dec = (1000.0 / walk_speed_avg) / 60.0 if walk_speed_avg > 0 else None
-
-    return {
-        "run_duration_min": round(run_sec / 60.0, 1),
-        "run_distance_km": round(run_dist_m / 1000.0, 2),
-        "run_pace_min_km": round(run_pace_dec, 2) if run_pace_dec else None,
-        "run_pace_str": format_pace(run_pace_dec),
-        "walk_duration_min": round(walk_sec / 60.0, 1),
-        "walk_distance_km": round(walk_dist_m / 1000.0, 2),
-        "walk_pace_min_km": round(walk_pace_dec, 2) if walk_pace_dec else None,
-        "walk_pace_str": format_pace(walk_pace_dec),
-        "idle_duration_min": round(idle_sec / 60.0, 1),
+def extract_native_typed_splits(client, act_id):
+    """Fetch official native Run/Walk/Stand typed splits directly from Garmin API."""
+    res = {
+        "run_duration_min": 0.0,
+        "run_distance_km": 0.0,
+        "run_pace_min_km": None,
+        "run_pace_str": "N/A",
+        "walk_duration_min": 0.0,
+        "walk_distance_km": 0.0,
+        "walk_pace_min_km": None,
+        "walk_pace_str": "N/A",
+        "idle_duration_min": 0.0
     }
+    typed_splits_raw = None
+    try:
+        typed_splits_raw = client.get_activity_typed_splits(act_id)
+        splits = typed_splits_raw.get("splits", []) if isinstance(typed_splits_raw, dict) else []
+
+        run_dur_s, run_dist_m = 0.0, 0.0
+        walk_dur_s, walk_dist_m = 0.0, 0.0
+        stand_dur_s = 0.0
+
+        for s in splits:
+            stype = str(s.get("type", "")).upper()
+            dur = float(s.get("duration", 0.0) or 0.0)
+            dist = float(s.get("distance", 0.0) or 0.0)
+            if "RUN" in stype:
+                run_dur_s += dur
+                run_dist_m += dist
+            elif "WALK" in stype:
+                walk_dur_s += dur
+                walk_dist_m += dist
+            elif "STAND" in stype or "IDLE" in stype:
+                stand_dur_s += dur
+
+        if run_dur_s > 0 or run_dist_m > 0:
+            res["run_duration_min"] = round(run_dur_s / 60.0, 1)
+            res["run_distance_km"] = round(run_dist_m / 1000.0, 2)
+            if run_dur_s > 0 and run_dist_m > 0:
+                run_pace_dec = (1000.0 / (run_dist_m / run_dur_s)) / 60.0
+                res["run_pace_min_km"] = round(run_pace_dec, 2)
+                res["run_pace_str"] = format_pace(run_pace_dec)
+
+        if walk_dur_s > 0 or walk_dist_m > 0:
+            res["walk_duration_min"] = round(walk_dur_s / 60.0, 1)
+            res["walk_distance_km"] = round(walk_dist_m / 1000.0, 2)
+            if walk_dur_s > 0 and walk_dist_m > 0:
+                walk_pace_dec = (1000.0 / (walk_dist_m / walk_dur_s)) / 60.0
+                res["walk_pace_min_km"] = round(walk_pace_dec, 2)
+                res["walk_pace_str"] = format_pace(walk_pace_dec)
+
+        res["idle_duration_min"] = round(stand_dur_s / 60.0, 1)
+    except Exception as e:
+        print(f"  Warning: Typed splits API failed for {act_id}: {e}")
+
+    return res, typed_splits_raw
 
 
 def extract_trackpoints_and_details(client, summary_df):
-    """Extract raw time-series trackpoints, HR zones, and Run/Walk segmentation for each activity, and dump full raw JSON."""
+    """Extract raw trackpoints, native HR zones, native typed splits, and dump full raw JSON for each activity."""
     all_trackpoints = []
     enriched_summary = []
 
@@ -205,45 +235,36 @@ def extract_trackpoints_and_details(client, summary_df):
         start_time = row["start_time"]
         act_name = row["activity_name"]
 
-        print(f"[{idx+1}/{len(summary_df)}] Fetching details for activity {act_id} ({act_name} - {start_time})...")
+        print(f"[{idx+1}/{len(summary_df)}] Ingesting native Garmin API data for activity {act_id} ({act_name} - {start_time})...")
 
-        # 1. Fetch Full Raw Activity JSON payload endpoints
+        # 1. Direct Native HR Zone Ingestion
+        hr_z_dict, hr_zones_raw = extract_native_hr_zones(client, act_id)
+
+        # 2. Direct Native Run/Walk Typed Splits Ingestion
+        segment_dict, typed_splits_raw = extract_native_typed_splits(client, act_id)
+
+        # 3. Full Raw Activity JSON payload endpoints
         full_summary_raw = None
         splits_raw = None
         weather_raw = None
-        hr_zones_raw = None
 
         try:
             full_summary_raw = client.get_activity(act_id)
-        except Exception as e:
-            print(f"  Warning: Full activity summary failed for {act_id}: {e}")
+        except Exception:
+            pass
 
         try:
             splits_raw = client.get_activity_splits(act_id)
-        except Exception as e:
-            print(f"  Warning: Activity splits failed for {act_id}: {e}")
+        except Exception:
+            pass
 
         try:
             weather_raw = client.get_activity_weather(act_id)
-        except Exception as e:
-            print(f"  Warning: Activity weather failed for {act_id}: {e}")
+        except Exception:
+            pass
 
-        try:
-            hr_zones_raw = client.get_activity_hr_in_timezones(act_id)
-        except Exception as e:
-            print(f"  Warning: HR zones failed for {act_id}: {e}")
-
-        # Parse HR zones into dict
-        hr_z_dict = {"hr_z1_secs": 0, "hr_z2_secs": 0, "hr_z3_secs": 0, "hr_z4_secs": 0, "hr_z5_secs": 0}
-        if hr_zones_raw and isinstance(hr_zones_raw, list):
-            for z in hr_zones_raw:
-                z_num = z.get("zoneNumber")
-                if z_num in [1, 2, 3, 4, 5]:
-                    hr_z_dict[f"hr_z{z_num}_secs"] = round(z.get("secsInZone", 0), 1)
-
-        # 2. Fetch Activity detail trackpoints
+        # 4. Activity detail trackpoints
         act_tps = []
-        details_raw = None
         try:
             details_raw = client.get_activity_details(act_id)
             if details_raw and "activityDetailMetrics" in details_raw:
@@ -261,7 +282,6 @@ def extract_trackpoints_and_details(client, summary_df):
                         continue
 
                     ts_dt = pd.to_datetime(ts_raw, unit="ms", errors="coerce")
-
                     speed_mps = m_dict.get("directSpeed")
                     pace_min_km = (1000.0 / speed_mps) / 60.0 if speed_mps and speed_mps > 0 else None
 
@@ -299,12 +319,13 @@ def extract_trackpoints_and_details(client, summary_df):
         except Exception as e:
             print(f"  Warning: Details extraction failed for {act_id}: {e}")
 
-        # Save Raw Activity JSON payload to data/raw_activity_{act_id}.json
+        # Save Official Raw Activity JSON payload to data/raw_activity_{act_id}.json
         try:
             raw_payload = {
                 "activity_id": act_id,
                 "summary": full_summary_raw,
                 "splits": splits_raw,
+                "typed_splits": typed_splits_raw,
                 "weather": weather_raw,
                 "hr_zones": hr_zones_raw,
                 "details_sample": act_tps[::5] if len(act_tps) > 100 else act_tps
@@ -312,13 +333,9 @@ def extract_trackpoints_and_details(client, summary_df):
             raw_json_path = DATA_DIR / f"raw_activity_{act_id}.json"
             with open(raw_json_path, "w") as f:
                 json.dump(raw_payload, f, indent=2, default=str)
-            print(f"  Saved raw JSON payload to {raw_json_path}")
+            print(f"  Saved official raw JSON payload to {raw_json_path}")
         except Exception as e:
             print(f"  Warning: Failed saving raw JSON for {act_id}: {e}")
-
-        # Compute Run/Walk Segmentation
-        act_tp_df = pd.DataFrame(act_tps) if act_tps else pd.DataFrame()
-        segment_dict = process_run_walk_segmentation(act_tp_df)
 
         # Merge summary record
         row_dict = row.to_dict()
@@ -329,13 +346,26 @@ def extract_trackpoints_and_details(client, summary_df):
     return pd.DataFrame(enriched_summary), pd.DataFrame(all_trackpoints)
 
 
-def fetch_garmin_data():
-    """Main execution function to fetch and save Garmin runs, trackpoints, HR zones, and full raw JSON payloads."""
+def fetch_garmin_data(force_resync=True):
+    """Main execution function with incremental sync capability for Garmin Connect runs."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    summary_file = DATA_DIR / "runs_summary.csv"
+    trackpoints_file = DATA_DIR / "raw_trackpoints.csv"
+
+    existing_summary_df = pd.DataFrame()
+    existing_act_ids = set()
+
+    if summary_file.exists() and not force_resync:
+        try:
+            existing_summary_df = pd.read_csv(summary_file)
+            if "activity_id" in existing_summary_df.columns:
+                existing_act_ids = set(existing_summary_df["activity_id"].astype(str))
+        except Exception:
+            pass
 
     client = get_garmin_client()
 
-    print("Fetching activities from Garmin Connect...")
+    print("Fetching activities list from Garmin Connect...")
     activities = client.get_activities(0, 100)
     print(f"Retrieved {len(activities)} total activities.")
 
@@ -346,22 +376,45 @@ def fetch_garmin_data():
         print("No running activities found.")
         return False
 
-    print("\nExtracting trackpoints, HR zones, Run/Walk segmentation & raw JSON payloads...")
-    summary_df, trackpoints_df = extract_trackpoints_and_details(client, raw_summary_df)
+    # Incremental sync filter: only fetch new activities unless force_resync=True
+    if existing_act_ids and not force_resync:
+        summary_to_process = raw_summary_df[~raw_summary_df["activity_id"].astype(str).isin(existing_act_ids)]
+        if summary_to_process.empty:
+            print("All activities are up to date! No new runs to fetch.")
+            return True
+        print(f"Incremental sync: Found {len(summary_to_process)} new activities to fetch.")
+    else:
+        summary_to_process = raw_summary_df
 
-    runs_summary_path = DATA_DIR / "runs_summary.csv"
-    summary_df.to_csv(runs_summary_path, index=False)
-    print(f"Saved activity summaries to {runs_summary_path}")
+    print(f"\nIngesting native Garmin HR zones & typed splits for {len(summary_to_process)} activities...")
+    new_summary_df, new_trackpoints_df = extract_trackpoints_and_details(client, summary_to_process)
 
-    raw_trackpoints_path = DATA_DIR / "raw_trackpoints.csv"
-    trackpoints_df.to_csv(raw_trackpoints_path, index=False)
-    print(f"Saved {len(trackpoints_df)} raw trackpoints to {raw_trackpoints_path}")
+    # Merge with existing summary if incremental
+    if not existing_summary_df.empty and not force_resync:
+        combined_summary_df = pd.concat([new_summary_df, existing_summary_df], ignore_index=True)
+        combined_summary_df = combined_summary_df.drop_duplicates(subset=["activity_id"], keep="first")
+    else:
+        combined_summary_df = new_summary_df
+
+    combined_summary_df.to_csv(summary_file, index=False)
+    print(f"Saved {len(combined_summary_df)} activity summaries to {summary_file}")
+
+    # Merge trackpoints if incremental
+    if trackpoints_file.exists() and not force_resync and not new_trackpoints_df.empty:
+        existing_tp_df = pd.read_csv(trackpoints_file)
+        combined_tp_df = pd.concat([new_trackpoints_df, existing_tp_df], ignore_index=True)
+        combined_tp_df = combined_tp_df.drop_duplicates(subset=["activity_id", "timestamp"], keep="first")
+    else:
+        combined_tp_df = new_trackpoints_df
+
+    combined_tp_df.to_csv(trackpoints_file, index=False)
+    print(f"Saved {len(combined_tp_df)} raw trackpoints to {trackpoints_file}")
 
     print("\nExtraction Summary:")
-    print(f"Total Runs Parsed: {len(summary_df)}")
-    print(f"Total Trackpoints Saved: {len(trackpoints_df)}")
+    print(f"Total Runs Synced: {len(combined_summary_df)}")
+    print(f"Total Trackpoints Synced: {len(combined_tp_df)}")
     return True
 
 
 if __name__ == "__main__":
-    fetch_garmin_data()
+    fetch_garmin_data(force_resync=True)
