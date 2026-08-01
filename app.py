@@ -143,6 +143,105 @@ def load_data():
     return summary_df, trackpoints_df
 
 
+# Fallback Analysis Generator if API is rate limited
+def generate_fallback_race_analysis(run_summary_dict, splits_text, baseline_text):
+    distance_km = run_summary_dict.get('distance_km', 0)
+    avg_pace_str = run_summary_dict.get('avg_pace_str', 'N/A')
+    avg_pace_dec = run_summary_dict.get('avg_pace_min_km', 8.5)
+    avg_hr = run_summary_dict.get('avg_heart_rate', 150)
+    avg_cadence = run_summary_dict.get('avg_cadence_spm', 145)
+    pace_gap_sec = int(round((avg_pace_dec - 7.00) * 60))
+
+    worked_well = [
+        f"Completed **{distance_km:.2f} km** with an average heart rate of **{avg_hr:.0f} bpm**.",
+        f"Cadence averaged **{avg_cadence:.0f} spm**, maintaining continuous aerobic motion."
+    ]
+
+    broke_down = [
+        f"Average pace (**{avg_pace_str} min/km**) is **{pace_gap_sec} seconds/km slower** than target 7:00 min/km benchmark.",
+        f"Step rate ({avg_cadence:.0f} spm) can be increased to 165+ spm to shorten ground contact time."
+    ]
+
+    standout = f"To close the **{pace_gap_sec}s/km gap** to 7:00 min/km, incorporate 400m interval repeats at 6:45 pace and focus on quick, light foot strikes."
+
+    return f"""
+### 🟢 What Worked Well
+- {worked_well[0]}
+- {worked_well[1]}
+
+### ⚠️ What Broke Down / Tactical Flaws
+- {broke_down[0]}
+- {broke_down[1]}
+
+### 🎯 Standout Takeaway vs 7:00 Target Goal
+- {standout}
+"""
+
+
+# ---------------------------------------------------------
+# Streamlit Caching for Gemini AI Analysis
+# ---------------------------------------------------------
+@st.cache_data(ttl=86400, show_spinner=False)
+def analyze_run_with_gemini(activity_id: str, run_summary_dict: dict, splits_text: str, baseline_text: str, gemini_key: str):
+    """Query Gemini AI to generate dynamic, expert biomechanics and pacing analysis for a specific run."""
+    if not gemini_key:
+        return generate_fallback_race_analysis(run_summary_dict, splits_text, baseline_text)
+
+    prompt = f"""YOU ARE AN EXPERT BIOMECHANICS & PACING RUNNING COACH.
+Analyze the following telemetry for a runner pursuing a 5K target goal of 7:00 min/km pace on a Garmin Forerunner 165.
+
+RUN TELEMETRY SUMMARY:
+- Distance: {run_summary_dict.get('distance_km')} km
+- Total Duration: {run_summary_dict.get('duration_min')} min
+- Average Pace: {run_summary_dict.get('avg_pace_str')} min/km ({run_summary_dict.get('avg_pace_min_km')} min/km)
+- Average Heart Rate: {run_summary_dict.get('avg_heart_rate')} bpm (Max: {run_summary_dict.get('max_heart_rate')} bpm)
+- Average Cadence: {run_summary_dict.get('avg_cadence_spm')} spm
+- Stride Length: {run_summary_dict.get('stride_length_m')} meters
+- Calories Burned: {run_summary_dict.get('calories')} kcal
+- Date: {run_summary_dict.get('start_time')}
+
+KM-BY-KM LAP BREAKDOWN:
+{splits_text}
+
+RUNNER 30-DAY BASELINE:
+{baseline_text}
+
+TARGET BENCHMARK: 5K distance at 7:00 min/km pace.
+
+INSTRUCTIONS:
+Provide a deep, highly specific, data-backed analysis evaluating pacing strategy (positive/negative splits), cardiac drift, cadence stability, and terrain/form efficiency.
+
+Format your response strictly into these 3 Markdown sections:
+
+### 🟢 What Worked Well
+- (2-3 specific bullet points citing split data, cadence, or HR stability)
+
+### ⚠️ What Broke Down / Tactical Flaws
+- (2-3 specific bullet points detailing pacing volatility, over-striding, HR spikes, or cadence drops)
+
+### 🎯 Standout Takeaway vs 7:00 Target Goal
+- (A concise 2-sentence tactical summary detailing the exact adjustment needed for the next run to close the pace gap to 7:00 min/km)
+"""
+
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=gemini_key)
+
+        model_names = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest", "gemini-1.5-flash"]
+        for model_name in model_names:
+            try:
+                model = genai.GenerativeModel(model_name)
+                res = model.generate_content(prompt)
+                if res and hasattr(res, "text") and res.text:
+                    return res.text
+            except Exception:
+                continue
+
+        return generate_fallback_race_analysis(run_summary_dict, splits_text, baseline_text)
+    except Exception:
+        return generate_fallback_race_analysis(run_summary_dict, splits_text, baseline_text)
+
+
 # ---------------------------------------------------------
 # Sidebar (Global Controls Only)
 # ---------------------------------------------------------
@@ -200,6 +299,17 @@ selected_tab = option_menu(
         "nav-link-selected": {"background-color": "#3B82F6", "color": "#FFFFFF", "font-weight": "600", "border-radius": "8px"},
     }
 )
+
+# Fetch Gemini Key
+gemini_key = None
+try:
+    if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
+        gemini_key = st.secrets["GEMINI_API_KEY"]
+except Exception:
+    pass
+
+if not gemini_key:
+    gemini_key = os.getenv("GEMINI_API_KEY")
 
 # =========================================================
 # 1. 🏠 HOME OVERVIEW (EMBEDDED GEMINI AI CHAT)
@@ -275,22 +385,10 @@ if selected_tab == "Home Overview":
     </div>
     """, unsafe_allow_html=True)
 
-    # ---------------------------------------------------------
     # EMBEDDED GEMINI AI RUNNING COACH CHAT
-    # ---------------------------------------------------------
     st.markdown("---")
     st.subheader("💬 Gemini AI Running Coach")
     st.caption("Ask questions about your Garmin telemetry, 5K training plan, pacing, or recovery tips.")
-
-    gemini_key = None
-    try:
-        if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
-            gemini_key = st.secrets["GEMINI_API_KEY"]
-    except Exception:
-        pass
-
-    if not gemini_key:
-        gemini_key = os.getenv("GEMINI_API_KEY")
 
     if not gemini_key:
         st.warning("⚠️ `GEMINI_API_KEY` is missing. Please add `GEMINI_API_KEY` to `.env` or Streamlit Secrets.")
@@ -366,10 +464,10 @@ You are an expert AI Running Coach and Exercise Physiologist. Provide specific, 
 
 
 # =========================================================
-# 2. 🏃 SINGLE RUN DEEP-DIVE
+# 2. 🏃 SINGLE RUN DEEP-DIVE (DYNAMIC GEMINI RACE ANALYSIS)
 # =========================================================
 elif selected_tab == "Single Run Deep-Dive":
-    st.header("🏃 Activity Telemetry & Biometrics")
+    st.header("🏃 Activity Telemetry & Dynamic AI Race Analysis")
 
     run_options = {
         f"{row['start_time'].strftime('%b %d, %Y %H:%M')} - {row['activity_name']} ({row['distance_km']} km)": row["activity_id"]
@@ -395,73 +493,64 @@ elif selected_tab == "Single Run Deep-Dive":
                 if sp_mps > 0 and cad_spm > 0:
                     run_tp.at[t_idx, "stride_length_m"] = round(sp_mps / (cad_spm / 60.0), 2)
 
-    # Coaching Insights Box
-    avg_pace_dec = run_sum["avg_pace_min_km"] if pd.notnull(run_sum["avg_pace_min_km"]) else 8.5
-    pace_gap_sec = int(round((avg_pace_dec - 7.00) * 60))
-    avg_cadence = run_sum["avg_cadence_spm"] if pd.notnull(run_sum["avg_cadence_spm"]) else 0.0
-
-    cardiac_drift_pct = 0.0
-    first_q_hr, last_q_hr = 0.0, 0.0
-    if not run_tp.empty and "heart_rate_bpm" in run_tp.columns:
-        valid_hr_tp = run_tp.dropna(subset=["heart_rate_bpm"])
-        if len(valid_hr_tp) >= 20:
-            q_len = max(1, len(valid_hr_tp) // 4)
-            first_q_hr = valid_hr_tp.iloc[:q_len]["heart_rate_bpm"].mean()
-            last_q_hr = valid_hr_tp.iloc[-q_len:]["heart_rate_bpm"].mean()
-            if first_q_hr > 0:
-                cardiac_drift_pct = ((last_q_hr - first_q_hr) / first_q_hr) * 100.0
-
+    # ---------------------------------------------------------
+    # DYNAMIC GEMINI AI RACE ANALYSIS CARD
+    # ---------------------------------------------------------
     st.markdown("""<div class="insights-card">
         <div class="insights-header">
-            <span>🎯 Run Executive Summary & Coaching Insights</span>
+            <span>🤖 Gemini AI Race Analysis & Coaching Telemetry</span>
         </div>""", unsafe_allow_html=True)
 
-    ins_col1, ins_col2 = st.columns(2)
+    col_ins_h, col_ins_btn = st.columns([4, 1])
+    with col_ins_btn:
+        if st.button("🔄 Re-analyze Run", key=f"btn_reanalyze_{selected_act_id}"):
+            analyze_run_with_gemini.clear()
+            st.rerun()
 
-    with ins_col1:
-        if pace_gap_sec > 0:
-            st.markdown(f"""<div style="margin-bottom: 12px;">
-                <span class="insight-badge badge-amber">⏱️ Target Pace Gap</span><br>
-                Average pace <b>{run_sum['avg_pace_str']} min/km</b> is <b>{pace_gap_sec} seconds/km slower</b> than target 7:00 min/km benchmark.
-            </div>""", unsafe_allow_html=True)
-        else:
-            st.markdown(f"""<div style="margin-bottom: 12px;">
-                <span class="insight-badge badge-green">🚀 On / Ahead of Target</span><br>
-                Average pace <b>{run_sum['avg_pace_str']} min/km</b> meets or exceeds target benchmark!
-            </div>""", unsafe_allow_html=True)
+    # Build Km-by-Km Lap Breakdown
+    km_splits_summary = []
+    if not run_tp.empty and "distance_m" in run_tp.columns:
+        run_tp["km_split"] = (run_tp["distance_m"] // 1000).astype(int) + 1
+        for km_num, group in run_tp.groupby("km_split"):
+            if km_num > 15:
+                break
+            avg_p = group["pace_min_km"].mean()
+            avg_hr_split = group["heart_rate_bpm"].mean()
+            avg_cad_split = group["cadence_spm"].mean()
+            if pd.notnull(avg_p) and avg_p > 0:
+                p_mins = int(avg_p)
+                p_secs = int(round((avg_p - p_mins) * 60))
+                if p_secs == 60:
+                    p_mins += 1
+                    p_secs = 0
+                p_str = f"{p_mins}:{p_secs:02d}"
+            else:
+                p_str = "N/A"
+            km_splits_summary.append(f"KM {km_num}: Pace {p_str} min/km ({avg_p:.2f}), HR {avg_hr_split:.0f} bpm, Cadence {avg_cad_split:.0f} spm")
 
-        if avg_cadence < 155:
-            st.markdown(f"""<div style="margin-bottom: 12px;">
-                <span class="insight-badge badge-amber">⚠️ Cadence Warning ({avg_cadence:.0f} spm)</span><br>
-                Cadence is below recommended 160–170 spm threshold. Low step frequency increases ground contact time and joint impact.
-            </div>""", unsafe_allow_html=True)
-        else:
-            st.markdown(f"""<div style="margin-bottom: 12px;">
-                <span class="insight-badge badge-green">🔥 Optimal Cadence ({avg_cadence:.0f} spm)</span><br>
-                Good leg turnover rate minimizing impact stress.
-            </div>""", unsafe_allow_html=True)
+    splits_text = "\n".join(km_splits_summary) if km_splits_summary else "Km splits not available."
 
-    with ins_col2:
-        if cardiac_drift_pct > 5.0:
-            st.markdown(f"""<div style="margin-bottom: 12px;">
-                <span class="insight-badge badge-red">🌡️ Cardiac Drift Detected (+{cardiac_drift_pct:.1f}%)</span><br>
-                Heart rate rose from <b>{first_q_hr:.0f} bpm</b> (first 25%) to <b>{last_q_hr:.0f} bpm</b> (final 25%). Indicates aerobic fatigue or hydration drift.
-            </div>""", unsafe_allow_html=True)
-        else:
-            st.markdown(f"""<div style="margin-bottom: 12px;">
-                <span class="insight-badge badge-green">💚 Controlled HR (+{cardiac_drift_pct:.1f}% Drift)</span><br>
-                Heart rate remained steady from start (<b>{first_q_hr:.0f} bpm</b>) to finish (<b>{last_q_hr:.0f} bpm</b>).
-            </div>""", unsafe_allow_html=True)
+    thirty_days_ago = summary_df["start_time"].max() - timedelta(days=30)
+    monthly_runs = summary_df[summary_df["start_time"] >= thirty_days_ago]
+    baseline_text = f"30-Day Avg Pace: {monthly_runs['avg_pace_min_km'].mean():.2f} min/km, Avg HR: {monthly_runs['avg_heart_rate'].mean():.0f} bpm, Avg Cadence: {monthly_runs['avg_cadence_spm'].mean():.0f} spm"
 
-        st.markdown("""<div>
-            <b>📋 Next Run Action Items:</b>
-            <ul style="margin-top: 4px; padding-left: 20px; font-size: 0.9rem; color: #CBD5E1;">
-                <li><b>Pacing:</b> Focus on a controlled first km to prevent late-run cardiac drift.</li>
-                <li><b>Cadence Drill:</b> Maintain light, fast steps aiming for 165+ spm.</li>
-                <li><b>Hydration:</b> Ensure proper pre-run fluid intake.</li>
-            </ul>
-        </div>""", unsafe_allow_html=True)
+    run_dict = {
+        "distance_km": run_sum["distance_km"],
+        "duration_min": run_sum["duration_min"],
+        "avg_pace_str": run_sum["avg_pace_str"],
+        "avg_pace_min_km": run_sum["avg_pace_min_km"],
+        "avg_heart_rate": run_sum["avg_heart_rate"],
+        "max_heart_rate": run_sum["max_heart_rate"],
+        "avg_cadence_spm": run_sum["avg_cadence_spm"],
+        "stride_length_m": (run_sum["stride_length_cm"] / 100.0) if pd.notnull(run_sum["stride_length_cm"]) else None,
+        "calories": run_sum["calories"],
+        "start_time": run_sum["start_time"].strftime("%Y-%m-%d %H:%M")
+    }
 
+    with st.spinner("🤖 Generating Gemini AI Race Analysis..."):
+        analysis_markdown = analyze_run_with_gemini(selected_act_id, run_dict, splits_text, baseline_text, gemini_key)
+
+    st.markdown(analysis_markdown)
     st.markdown("</div>", unsafe_allow_html=True)
 
     # Shadcn Metric Cards
